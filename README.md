@@ -27,16 +27,20 @@ F1-Predictive-Analysis-Project/
 │
 ├── scripts/
 │   ├── build_undercut_dataset.py       # Builds f1_undercut_dataset.csv + trains model
-│   └── test_undercut_model.py          # Interactive model test harness (4 modes)
+│   ├── build_overcut_dataset.py        # Builds f1_overcut_dataset.csv + trains model
+│   ├── test_undercut_model.py          # Interactive undercut model test harness (4 modes)
+│   └── test_overcut_model.py           # Interactive overcut model test harness (4 modes)
 │
 ├── data/
 │   ├── f1_pit_window_labels.csv        # 47K lap-level observations (pit window model)
-│   └── f1_undercut_dataset.csv         # 966 labeled undercut attempts (2022-2024)
+│   ├── f1_undercut_dataset.csv         # 966 labeled undercut attempts (2022-2024)
+│   └── f1_overcut_dataset.csv          # 932 labeled overcut attempts (2022-2024)
 │
 ├── models/
 │   ├── f1_pit_window_model.pkl         # Trained pit window GBM
 │   ├── f1_pit_window_model_tuned.pkl   # Hyperparameter-tuned pit window GBM
-│   └── f1_undercut_model.pkl           # Trained undercut XGBoost classifier
+│   ├── f1_undercut_model.pkl           # Trained undercut XGBoost classifier
+│   └── f1_overcut_model.pkl            # Trained overcut XGBoost classifier
 │
 ├── outputs/
 │   └── figures/                        # All generated plots
@@ -46,7 +50,9 @@ F1-Predictive-Analysis-Project/
 
 ---
 
-## Undercut Model Results (2024 holdout)
+## Model Results (2024 holdout)
+
+### Undercut (966 attempts, 44.1% success rate)
 
 | Model | Accuracy | ROC-AUC |
 |---|---|---|
@@ -54,6 +60,15 @@ F1-Predictive-Analysis-Project/
 | XGBoost (primary) | 73.8% | 0.806 |
 
 **Key predictors (SHAP):** gap to car ahead, pace delta, tire age advantage, degradation rate, closing rate.
+
+### Overcut (932 attempts, 25.1% success rate)
+
+| Model | Accuracy | ROC-AUC |
+|---|---|---|
+| Logistic Regression (baseline) | 82.3% | 0.807 |
+| XGBoost (primary) | 80.5% | 0.804 |
+
+**Key predictors:** pace delta (strongest), gap ahead, tire age delta, stay-out lap count, degradation rates.
 
 ---
 
@@ -75,10 +90,20 @@ python scripts/test_undercut_model.py driver VER
 python scripts/test_undercut_model.py scenario
 ```
 
-**Rebuild the dataset and retrain from scratch:**
+**Test the overcut model interactively:**
+
+```bash
+python scripts/test_overcut_model.py inspect
+python scripts/test_overcut_model.py errors
+python scripts/test_overcut_model.py driver SAI
+python scripts/test_overcut_model.py scenario
+```
+
+**Rebuild datasets and retrain from scratch:**
 
 ```bash
 python scripts/build_undercut_dataset.py
+python scripts/build_overcut_dataset.py
 ```
 
 **Requirements:** Python 3.12, FastF1 3.8.x, pandas 2.2.x, scikit-learn, xgboost, shap
