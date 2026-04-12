@@ -20,11 +20,13 @@ import warnings
 import joblib
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 warnings.filterwarnings('ignore')
 
-MODEL_PATH   = './f1_undercut_model.pkl'
-DATASET_PATH = './f1_undercut_dataset.csv'
+ROOT         = Path(__file__).parent.parent
+MODEL_PATH   = ROOT / 'models' / 'f1_undercut_model.pkl'
+DATASET_PATH = ROOT / 'data'   / 'f1_undercut_dataset.csv'
 
 TRAIN_YEARS = [2022, 2023]
 TEST_YEARS  = [2024]
