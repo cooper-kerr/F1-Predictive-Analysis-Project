@@ -28,7 +28,15 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 warnings.filterwarnings('ignore')
-fastf1.Cache.enable_cache('./f1-cache')
+
+# ── Project root paths (run this script from the project root) ───────────────
+ROOT         = Path(__file__).parent.parent
+CACHE_DIR    = ROOT / 'f1-cache'
+DATA_DIR     = ROOT / 'data'
+MODEL_DIR    = ROOT / 'models'
+FIGURES_DIR  = ROOT / 'outputs' / 'figures'
+
+fastf1.Cache.enable_cache(str(CACHE_DIR))
 
 RANDOM_STATE    = 42
 FUEL_BURN_RATE  = 1.8
@@ -42,8 +50,8 @@ MIN_HIST_LAPS   = 3
 TRAIN_YEARS     = [2022, 2023]
 TEST_YEARS      = [2024]
 ALL_YEARS       = TRAIN_YEARS + TEST_YEARS
-DATASET_PATH    = './f1_undercut_dataset.csv'
-MODEL_PATH      = './f1_undercut_model.pkl'
+DATASET_PATH    = DATA_DIR  / 'f1_undercut_dataset.csv'
+MODEL_PATH      = MODEL_DIR / 'f1_undercut_model.pkl'
 
 plt.style.use('seaborn-v0_8-darkgrid')
 
@@ -419,7 +427,8 @@ if __name__ == '__main__':
         ax.legend(fontsize=8)
     fig.suptitle('Feature Distributions by Undercut Outcome', fontsize=13, fontweight='bold')
     plt.tight_layout()
-    plt.savefig('undercut_eda.png', dpi=150, bbox_inches='tight')
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    plt.savefig(FIGURES_DIR / 'undercut_eda.png', dpi=150, bbox_inches='tight')
     plt.close()
 
     # Confusion matrices + ROC
@@ -436,7 +445,7 @@ if __name__ == '__main__':
     axes[2].set_title('ROC Curves — 2024 Holdout')
     plt.suptitle('Undercut Success Prediction — Model Evaluation', fontsize=13, fontweight='bold')
     plt.tight_layout()
-    plt.savefig('undercut_model_evaluation.png', dpi=150, bbox_inches='tight')
+    plt.savefig(FIGURES_DIR / 'undercut_model_evaluation.png', dpi=150, bbox_inches='tight')
     plt.close()
 
     # SHAP
@@ -455,7 +464,7 @@ if __name__ == '__main__':
     plt.suptitle('XGBoost SHAP Analysis — Drivers of Undercut Success',
                  fontsize=13, fontweight='bold')
     plt.tight_layout()
-    plt.savefig('undercut_shap.png', dpi=150, bbox_inches='tight')
+    plt.savefig(FIGURES_DIR / 'undercut_shap.png', dpi=150, bbox_inches='tight')
     plt.close()
 
     # Gap success rate bar chart
@@ -471,7 +480,7 @@ if __name__ == '__main__':
     ax2.set_ylabel('Number of Attempts', color='tomato')
     ax1.set_title('Undercut Success Rate by Gap to Car Ahead', fontsize=12, fontweight='bold')
     plt.tight_layout()
-    plt.savefig('undercut_gap_vs_success.png', dpi=150, bbox_inches='tight')
+    plt.savefig(FIGURES_DIR / 'undercut_gap_vs_success.png', dpi=150, bbox_inches='tight')
     plt.close()
 
     # Tire age advantage chart
@@ -487,13 +496,8 @@ if __name__ == '__main__':
     ax.set_title('Undercut Success Rate by Relative Tire Age Advantage',
                  fontsize=12, fontweight='bold')
     plt.tight_layout()
-    plt.savefig('undercut_age_vs_success.png', dpi=150, bbox_inches='tight')
+    plt.savefig(FIGURES_DIR / 'undercut_age_vs_success.png', dpi=150, bbox_inches='tight')
     plt.close()
 
-    print('Plots saved:')
-    print('  undercut_eda.png')
-    print('  undercut_model_evaluation.png')
-    print('  undercut_shap.png')
-    print('  undercut_gap_vs_success.png')
-    print('  undercut_age_vs_success.png')
+    print(f'Plots saved to {FIGURES_DIR}/')
     print('\nDone.')

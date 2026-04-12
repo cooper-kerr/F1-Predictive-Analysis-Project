@@ -1,0 +1,23 @@
+# FastF1 cache — large and fully regenerable, do not commit
+f1-cache/2022/
+f1-cache/2023/
+f1-cache/2024/
+f1-cache/fastf1_http_cache.sqlite
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Environment
+.env
+.venv/
+venv/
+
+# OS
+.DS_Store
