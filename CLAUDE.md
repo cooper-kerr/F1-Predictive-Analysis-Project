@@ -13,9 +13,10 @@ F1 race strategy prediction project (Cooper Kerr & Isaac Middlemas, University o
 
 **Rebuild datasets and retrain models from scratch:**
 ```bash
-python scripts/build_undercut_dataset.py
-python scripts/build_overcut_dataset.py
+python scripts/build_undercut_dataset.py --rebuild
+python scripts/build_overcut_dataset.py --rebuild
 ```
+Without `--rebuild`, the scripts skip the FastF1 pull and load the existing CSV in `data/`. This is intentional for fast re-training after feature changes, but the raw data is not refreshed.
 Both scripts cache-check first — if the CSV already exists they skip the FastF1 data pull and jump straight to training.
 
 **Test models interactively:**

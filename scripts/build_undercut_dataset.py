@@ -4,6 +4,7 @@ Mirrors the notebook logic exactly — run this to generate results
 without needing a Jupyter kernel.
 """
 
+import sys
 import fastf1
 import pandas as pd
 import numpy as np
@@ -284,12 +285,17 @@ def build_full_dataset(years):
 
 if __name__ == '__main__':
 
+    rebuild = '--rebuild' in sys.argv
+
     # 1. Dataset
-    if Path(DATASET_PATH).exists():
-        print('Loading cached dataset...')
+    if Path(DATASET_PATH).exists() and not rebuild:
+        print('Loading cached dataset...  (pass --rebuild to regenerate from FastF1)')
         df = pd.read_csv(DATASET_PATH)
     else:
-        print('Building dataset — this will take several minutes...')
+        if rebuild:
+            print('--rebuild: ignoring cached dataset, pulling from FastF1...')
+        else:
+            print('Building dataset — this will take several minutes...')
         df = build_full_dataset(ALL_YEARS)
         df.to_csv(DATASET_PATH, index=False)
         print(f'\nSaved: {DATASET_PATH}')

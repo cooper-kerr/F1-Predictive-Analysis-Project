@@ -14,6 +14,7 @@ driver chooses not to pit). Features are extracted from the lap before that
 Train: 2022–2023  |  Test: 2024  (temporal holdout, consistent with undercut)
 """
 
+import sys
 import fastf1
 import pandas as pd
 import numpy as np
@@ -335,12 +336,17 @@ def build_full_dataset(years):
 
 if __name__ == '__main__':
 
+    rebuild = '--rebuild' in sys.argv
+
     # 1. Dataset
-    if DATASET_PATH.exists():
-        print('Loading cached dataset...')
+    if DATASET_PATH.exists() and not rebuild:
+        print('Loading cached dataset...  (pass --rebuild to regenerate from FastF1)')
         df = pd.read_csv(DATASET_PATH)
     else:
-        print('Building overcut dataset — this will take several minutes...')
+        if rebuild:
+            print('--rebuild: ignoring cached dataset, pulling from FastF1...')
+        else:
+            print('Building overcut dataset — this will take several minutes...')
         df = build_full_dataset(ALL_YEARS)
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         df.to_csv(DATASET_PATH, index=False)
