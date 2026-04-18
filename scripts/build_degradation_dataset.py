@@ -226,6 +226,102 @@ def predict_delta_pace(curve: dict, tire_age: float) -> float:
     return a * tire_age + b * tire_age * tire_age
 
 
+def evaluate_on_holdout(df_test: pd.DataFrame, curves: dict) -> pd.DataFrame:
+    """Predict delta_pace per row; return per-compound MAE and pooled R^2."""
+    df_test = df_test[df_test['compound'].isin(DRY_COMPOUNDS)].copy()
+    preds = []
+    for _, row in df_test.iterrows():
+        curve = lookup_curve(curves, row['compound'], row['circuit'])
+        if curve is None:
+            preds.append(np.nan)
+            continue
+        preds.append(predict_delta_pace(curve, float(row['tire_age'])))
+    df_test = df_test.assign(pred_delta_pace=preds).dropna(
+        subset=['pred_delta_pace'])
+    rows = []
+    for compound, grp in df_test.groupby('compound'):
+        err = (grp['delta_pace'] - grp['pred_delta_pace']).abs()
+        rows.append({
+            'compound': compound,
+            'n_laps':   int(len(grp)),
+            'mae_s':    round(float(err.mean()), 3),
+            'r2':       round(r2_score_manual(
+                grp['delta_pace'].to_numpy(),
+                grp['pred_delta_pace'].to_numpy()), 3),
+        })
+    return pd.DataFrame(rows)
+
+
+def compare_to_live_slope(df_test: pd.DataFrame, curves: dict) -> float:
+    """
+    Return R^2 of the in-stint linear slope estimator (the existing
+    pit-window pipeline's deg_delta) evaluated on the same 2024 rows.
+    """
+    df_test = df_test[df_test['compound'].isin(DRY_COMPOUNDS)].copy()
+    df_test = df_test.sort_values(['driver', 'stint', 'lap_number']).copy()
+    preds = []
+    for (driver, stint), grp in df_test.groupby(['driver', 'stint']):
+        grp_sorted = grp.sort_values('tire_age')
+        if len(grp_sorted) < 3:
+            preds.extend([np.nan] * len(grp))
+            continue
+        x = grp_sorted['tire_age'].to_numpy(dtype=float)
+        y = grp_sorted['delta_pace'].to_numpy(dtype=float)
+        slope = float(np.polyfit(x, y, 1)[0])
+        for age in grp['tire_age']:
+            preds.append(slope * float(age))
+    df_test = df_test.assign(live_pred=preds).dropna(subset=['live_pred'])
+    return r2_score_manual(
+        df_test['delta_pace'].to_numpy(),
+        df_test['live_pred'].to_numpy())
+
+
+def plot_degradation_curves(df_full: pd.DataFrame, curves: dict,
+                            out_path: Path) -> None:
+    """Three-panel (SOFT/MEDIUM/HARD) overlay: circuit curves + 2024 scatter."""
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+    age_grid = np.linspace(0, 40, 200)
+    df_2024 = df_full[df_full['year'].isin(TEST_YEARS)].copy()
+
+    for ax, compound in zip(axes, DRY_COMPOUNDS):
+        # Scatter: 2024 observations
+        grp = df_2024[df_2024['compound'] == compound]
+        ax.scatter(grp['tire_age'], grp['delta_pace'],
+                   s=6, alpha=0.08, color='grey',
+                   label='2024 green laps' if compound == 'SOFT' else None)
+
+        # Per-circuit curves
+        per_circuit = [(k, v) for k, v in curves.items()
+                       if k[0] == compound and k[1] != '__GLOBAL__']
+        for (_, _), fit in per_circuit:
+            a, b = fit['coef']
+            y_curve = a * age_grid + b * age_grid ** 2
+            ax.plot(age_grid, y_curve, color='steelblue',
+                    alpha=0.3, linewidth=1)
+
+        # Global fallback: heavy red line
+        if (compound, '__GLOBAL__') in curves:
+            a, b = curves[(compound, '__GLOBAL__')]['coef']
+            y_curve = a * age_grid + b * age_grid ** 2
+            ax.plot(age_grid, y_curve, color='crimson',
+                    linewidth=2.5, label=f'{compound} global fit')
+
+        ax.set_title(f'{compound}')
+        ax.set_xlabel('Tire age (laps)')
+        if compound == 'SOFT':
+            ax.set_ylabel('Delta pace vs baseline (s)')
+        ax.axhline(0, color='black', linestyle=':', linewidth=1)
+        ax.legend(loc='upper left', fontsize=8)
+
+    fig.suptitle('Tire Degradation — per-(compound, circuit) quadratic fits '
+                 '(2022-2023 train; 2024 scatter)',
+                 fontweight='bold', fontsize=12)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 if __name__ == '__main__':
     rebuild = '--rebuild' in sys.argv
 
@@ -270,3 +366,21 @@ if __name__ == '__main__':
     summary = pd.DataFrame(rows).sort_values(['compound', 'circuit'])
     print('\nTraining fit summary (top 15 rows):')
     print(summary.head(15).to_string(index=False))
+
+    # Evaluate on 2024
+    df_test = df[df['year'].isin(TEST_YEARS)].copy()
+    holdout_summary = evaluate_on_holdout(df_test, curves)
+    print('\n=== 2024 holdout (per compound) ===')
+    print(holdout_summary.to_string(index=False))
+
+    live_slope_r2 = compare_to_live_slope(df_test, curves)
+    print(f'\nLive in-stint slope estimator R^2 on same rows: '
+          f'{live_slope_r2:.3f}')
+    print('(Curve-based predictions should explain more variance '
+          'than the naive live slope.)')
+
+    # Figure
+    plot_degradation_curves(df, curves,
+                            FIGURES_DIR / 'degradation_curves.png')
+    print(f'\nFigure saved: {FIGURES_DIR / "degradation_curves.png"}')
+    print('\nDone.')
