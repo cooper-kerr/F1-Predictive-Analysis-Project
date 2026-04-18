@@ -151,6 +151,81 @@ def build_full_dataset(years):
     return pd.concat(rows, ignore_index=True)
 
 
+def r2_score_manual(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Coefficient of determination, robust to zero-variance targets."""
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    ss_res = float(np.sum((y_true - y_pred) ** 2))
+    ss_tot = float(np.sum((y_true - y_true.mean()) ** 2))
+    if ss_tot <= 1e-9:
+        return float('nan')
+    return 1.0 - ss_res / ss_tot
+
+
+def fit_quadratic(df_group: pd.DataFrame) -> dict | None:
+    """Fit delta_pace = a*age + b*age^2; return None if insufficient data."""
+    x = df_group['tire_age'].to_numpy(dtype=float)
+    y = df_group['delta_pace'].to_numpy(dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    x = x[mask]; y = y[mask]
+    if len(x) < MIN_LAPS_PER_CELL:
+        return None
+    if np.ptp(x) < 1.0:
+        return None
+    # polyfit returns [c2, c1, c0]; we want [c1, c2] for a*age + b*age^2 (no intercept)
+    # Fit with intercept free, then drop it to match the design spec shape.
+    coefs = np.polyfit(x, y, 2)  # [b, a, c]
+    b, a, _c = float(coefs[0]), float(coefs[1]), float(coefs[2])
+    y_pred = a * x + b * x * x
+    r2 = r2_score_manual(y, y_pred)
+    return {'coef': [a, b], 'n_laps': int(len(x)), 'r2_train': r2}
+
+
+def fit_all_curves(df_train: pd.DataFrame) -> dict:
+    """
+    Returns:
+      {
+        ('SOFT',   'Bahrain Grand Prix'): {coef:[a,b], n_laps, r2_train},
+        ...
+        ('SOFT',   '__GLOBAL__'):        {coef:[a,b], n_laps, r2_train},
+        ...
+      }
+    The __GLOBAL__ entry per compound is the compound-wide fallback for
+    holdout circuits not seen in training (or skipped for sample size).
+    """
+    curves = {}
+    df_train = df_train[df_train['compound'].isin(DRY_COMPOUNDS)].copy()
+
+    # Per (compound, circuit)
+    for (compound, circuit), grp in df_train.groupby(['compound', 'circuit']):
+        fit = fit_quadratic(grp)
+        if fit is None:
+            continue
+        curves[(compound, circuit)] = fit
+
+    # Per compound fallback (pool across all circuits)
+    for compound, grp in df_train.groupby('compound'):
+        fit = fit_quadratic(grp)
+        if fit is None:
+            continue
+        curves[(compound, '__GLOBAL__')] = fit
+
+    return curves
+
+
+def lookup_curve(curves: dict, compound: str, circuit: str) -> dict | None:
+    if (compound, circuit) in curves:
+        return curves[(compound, circuit)]
+    if (compound, '__GLOBAL__') in curves:
+        return curves[(compound, '__GLOBAL__')]
+    return None
+
+
+def predict_delta_pace(curve: dict, tire_age: float) -> float:
+    a, b = curve['coef']
+    return a * tire_age + b * tire_age * tire_age
+
+
 if __name__ == '__main__':
     rebuild = '--rebuild' in sys.argv
 
@@ -172,4 +247,26 @@ if __name__ == '__main__':
     print(f'Compound distribution:')
     print(df['compound'].value_counts().to_string())
 
-    # Fit + evaluation land in Task 2 / Task 3
+    # Fit curves on training years only
+    df_train = df[df['year'].isin(TRAIN_YEARS)].copy()
+    print(f'\nTraining observations: {len(df_train):,}')
+
+    curves = fit_all_curves(df_train)
+    print(f'Fitted {len(curves)} (compound, circuit) curves '
+          f'(includes compound-global fallbacks).')
+
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    joblib.dump({'curves': curves,
+                 'train_years': TRAIN_YEARS,
+                 'test_years':  TEST_YEARS}, MODEL_PATH)
+    print(f'Saved: {MODEL_PATH}')
+
+    # Print a compact training R2 summary
+    rows = []
+    for (compound, circuit), fit in curves.items():
+        rows.append({'compound': compound, 'circuit': circuit,
+                     'n_laps': fit['n_laps'],
+                     'r2_train': round(fit['r2_train'], 3)})
+    summary = pd.DataFrame(rows).sort_values(['compound', 'circuit'])
+    print('\nTraining fit summary (top 15 rows):')
+    print(summary.head(15).to_string(index=False))
