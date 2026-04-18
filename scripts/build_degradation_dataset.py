@@ -163,7 +163,7 @@ def r2_score_manual(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def fit_quadratic(df_group: pd.DataFrame) -> dict | None:
-    """Fit delta_pace = a*age + b*age^2; return None if insufficient data."""
+    """Fit delta_pace = c + a*age + b*age^2; return None if insufficient data."""
     x = df_group['tire_age'].to_numpy(dtype=float)
     y = df_group['delta_pace'].to_numpy(dtype=float)
     mask = np.isfinite(x) & np.isfinite(y)
@@ -172,22 +172,21 @@ def fit_quadratic(df_group: pd.DataFrame) -> dict | None:
         return None
     if np.ptp(x) < 1.0:
         return None
-    # polyfit returns [c2, c1, c0]; we want [c1, c2] for a*age + b*age^2 (no intercept)
-    # Fit with intercept free, then drop it to match the design spec shape.
-    coefs = np.polyfit(x, y, 2)  # [b, a, c]
-    b, a, _c = float(coefs[0]), float(coefs[1]), float(coefs[2])
-    y_pred = a * x + b * x * x
+    # polyfit returns highest-order first: [b, a, c] for b*x^2 + a*x + c.
+    coefs = np.polyfit(x, y, 2)
+    b, a, c = float(coefs[0]), float(coefs[1]), float(coefs[2])
+    y_pred = c + a * x + b * x * x
     r2 = r2_score_manual(y, y_pred)
-    return {'coef': [a, b], 'n_laps': int(len(x)), 'r2_train': r2}
+    return {'coef': [a, b, c], 'n_laps': int(len(x)), 'r2_train': r2}
 
 
 def fit_all_curves(df_train: pd.DataFrame) -> dict:
     """
     Returns:
       {
-        ('SOFT',   'Bahrain Grand Prix'): {coef:[a,b], n_laps, r2_train},
+        ('SOFT',   'Bahrain Grand Prix'): {coef:[a,b,c], n_laps, r2_train},
         ...
-        ('SOFT',   '__GLOBAL__'):        {coef:[a,b], n_laps, r2_train},
+        ('SOFT',   '__GLOBAL__'):        {coef:[a,b,c], n_laps, r2_train},
         ...
       }
     The __GLOBAL__ entry per compound is the compound-wide fallback for
@@ -222,8 +221,8 @@ def lookup_curve(curves: dict, compound: str, circuit: str) -> dict | None:
 
 
 def predict_delta_pace(curve: dict, tire_age: float) -> float:
-    a, b = curve['coef']
-    return a * tire_age + b * tire_age * tire_age
+    a, b, c = curve['coef']
+    return c + a * tire_age + b * tire_age * tire_age
 
 
 def evaluate_on_holdout(df_test: pd.DataFrame, curves: dict) -> pd.DataFrame:
@@ -294,15 +293,15 @@ def plot_degradation_curves(df_full: pd.DataFrame, curves: dict,
         per_circuit = [(k, v) for k, v in curves.items()
                        if k[0] == compound and k[1] != '__GLOBAL__']
         for (_, _), fit in per_circuit:
-            a, b = fit['coef']
-            y_curve = a * age_grid + b * age_grid ** 2
+            a, b, c = fit['coef']
+            y_curve = c + a * age_grid + b * age_grid ** 2
             ax.plot(age_grid, y_curve, color='steelblue',
                     alpha=0.3, linewidth=1)
 
         # Global fallback: heavy red line
         if (compound, '__GLOBAL__') in curves:
-            a, b = curves[(compound, '__GLOBAL__')]['coef']
-            y_curve = a * age_grid + b * age_grid ** 2
+            a, b, c = curves[(compound, '__GLOBAL__')]['coef']
+            y_curve = c + a * age_grid + b * age_grid ** 2
             ax.plot(age_grid, y_curve, color='crimson',
                     linewidth=2.5, label=f'{compound} global fit')
 
