@@ -1,18 +1,30 @@
 """
 F1 Tire Degradation Pipeline
 ============================
-Research question: For a given tire compound at a given circuit, how does
-lap pace decay as a function of tire age?
+Research question: how does tire pace evolve across a stint, and what does
+that tell us about compound-specific peak-grip windows and pit timing?
 
-Approach: fit per-(compound, circuit) quadratic curves
-  delta_pace(age) = a * age + b * age**2
-on 2022-2023 green-lap data (fuel-corrected, baseline-subtracted), evaluate
-on 2024 holdout.
+Approach: per-lap green-flag lap dataset with fuel correction and
+peak-pace baseline (= median of the stint's fastest 3 fuel-corrected laps).
+`delta_pace` is lost time versus that peak. Three summary analyses:
+
+  (1) Pace profile across a stint — per-compound mean delta_pace by tire-age
+      bucket, 2022-2023 training profile compared to 2024 holdout. Exposes
+      the U-shape: warm-up slow, peak in the middle, degradation at the end.
+
+  (2) Peak-pace age by compound — the tire age at which each stint's
+      fastest lap occurs. Strategic input: when is this tire at its best?
+
+  (3) Stint-length vs degradation magnitude — for each stint, the difference
+      between worst-3-laps and best-3-laps fuel-corrected pace; correlated
+      with stint length to size the pit-timing tradeoff.
 
 Outputs:
-  data/f1_degradation_dataset.csv       Filtered, fuel-corrected lap dataset
-  models/f1_degradation_curves.pkl      joblib dict of fitted quadratics
-  outputs/figures/degradation_curves.png  Three-panel curve overlay
+  data/f1_degradation_dataset.csv       Per-lap dataset (used by §5.1 notebook)
+  models/f1_degradation_analysis.pkl    Summary dict of all three analyses
+  outputs/figures/degradation_pace_profile.png
+  outputs/figures/peak_age_by_compound.png
+  outputs/figures/stint_length_vs_degradation.png
 """
 
 import sys
@@ -40,14 +52,18 @@ fastf1.Cache.enable_cache(str(CACHE_DIR))
 FUEL_BURN_RATE  = 1.8
 FUEL_LAP_EFFECT = 0.035
 BASELINE_WINDOW = 3
-MIN_LAPS_PER_CELL = 30
 TRAIN_YEARS = [2022, 2023]
 TEST_YEARS  = [2024]
 ALL_YEARS   = TRAIN_YEARS + TEST_YEARS
 DRY_COMPOUNDS = ['SOFT', 'MEDIUM', 'HARD']
 
 DATASET_PATH = DATA_DIR  / 'f1_degradation_dataset.csv'
-MODEL_PATH   = MODEL_DIR / 'f1_degradation_curves.pkl'
+MODEL_PATH   = MODEL_DIR / 'f1_degradation_analysis.pkl'
+
+AGE_BINS   = [0, 5, 10, 15, 20, 25, 30, 60]
+AGE_LABELS = ['0-5', '5-10', '10-15', '15-20', '20-25', '25-30', '30+']
+MIN_STINT_LAPS   = 8    # for stint summaries (peak age, degradation)
+MIN_CELL_STINTS  = 5    # for per-(compound, circuit) stint aggregates
 
 plt.style.use('seaborn-v0_8-darkgrid')
 
@@ -93,23 +109,24 @@ def extract_degradation_laps(session, year: int, circuit: str) -> pd.DataFrame:
         - (laps['LapNumber'] - 1) * FUEL_BURN_RATE * FUEL_LAP_EFFECT
     )
 
-    # Per (driver, stint): baseline = median of first BASELINE_WINDOW green laps
+    # Per (driver, stint): baseline = median of the fastest BASELINE_WINDOW
+    # fuel-corrected laps of the stint (peak-pace anchor, avoids tire warm-up
+    # contamination that biases a first-N-laps baseline). Requires the stint
+    # to have at least BASELINE_WINDOW laps.
     laps = laps.sort_values(['Driver', 'Stint', 'LapNumber']).copy()
-    laps['_stint_rank'] = laps.groupby(['Driver', 'Stint']).cumcount() + 1
+    stint_sizes = laps.groupby(['Driver', 'Stint']).size()
+    valid_stints = stint_sizes[stint_sizes >= BASELINE_WINDOW].index
+    laps = laps.set_index(['Driver', 'Stint']).loc[valid_stints].reset_index()
+
     baseline = (
-        laps[laps['_stint_rank'] <= BASELINE_WINDOW]
-        .groupby(['Driver', 'Stint'])['fuel_corrected_pace']
-        .median()
+        laps.groupby(['Driver', 'Stint'])['fuel_corrected_pace']
+        .apply(lambda s: s.nsmallest(BASELINE_WINDOW).median())
         .rename('baseline_pace')
     )
     laps = laps.join(baseline, on=['Driver', 'Stint'])
-
-    # Drop stints with no baseline (insufficient opening laps)
     laps = laps.dropna(subset=['baseline_pace']).copy()
 
-    # Drop the baseline laps themselves so they don't bias the fit
-    laps = laps[laps['_stint_rank'] > BASELINE_WINDOW].copy()
-
+    # delta_pace = lost time vs peak (>= 0 for non-peak laps, ~0 at peak).
     laps['delta_pace'] = laps['fuel_corrected_pace'] - laps['baseline_pace']
 
     out = laps[['Driver', 'Stint', 'Compound', 'TyreLife', 'LapNumber',
@@ -151,169 +168,197 @@ def build_full_dataset(years):
     return pd.concat(rows, ignore_index=True)
 
 
-def r2_score_manual(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Coefficient of determination, robust to zero-variance targets."""
-    y_true = np.asarray(y_true, dtype=float)
-    y_pred = np.asarray(y_pred, dtype=float)
-    ss_res = float(np.sum((y_true - y_pred) ** 2))
-    ss_tot = float(np.sum((y_true - y_true.mean()) ** 2))
-    if ss_tot <= 1e-9:
-        return float('nan')
-    return 1.0 - ss_res / ss_tot
-
-
-def fit_quadratic(df_group: pd.DataFrame) -> dict | None:
-    """Fit delta_pace = c + a*age + b*age^2; return None if insufficient data."""
-    x = df_group['tire_age'].to_numpy(dtype=float)
-    y = df_group['delta_pace'].to_numpy(dtype=float)
-    mask = np.isfinite(x) & np.isfinite(y)
-    x = x[mask]; y = y[mask]
-    if len(x) < MIN_LAPS_PER_CELL:
-        return None
-    if np.ptp(x) < 1.0:
-        return None
-    # polyfit returns highest-order first: [b, a, c] for b*x^2 + a*x + c.
-    coefs = np.polyfit(x, y, 2)
-    b, a, c = float(coefs[0]), float(coefs[1]), float(coefs[2])
-    y_pred = c + a * x + b * x * x
-    r2 = r2_score_manual(y, y_pred)
-    return {'coef': [a, b, c], 'n_laps': int(len(x)), 'r2_train': r2}
-
-
-def fit_all_curves(df_train: pd.DataFrame) -> dict:
+def compute_stint_summaries(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Returns:
-      {
-        ('SOFT',   'Bahrain Grand Prix'): {coef:[a,b,c], n_laps, r2_train},
-        ...
-        ('SOFT',   '__GLOBAL__'):        {coef:[a,b,c], n_laps, r2_train},
-        ...
-      }
-    The __GLOBAL__ entry per compound is the compound-wide fallback for
-    holdout circuits not seen in training (or skipped for sample size).
+    Collapse the per-lap dataset to one row per (year, circuit, driver, stint).
+
+    Columns returned:
+      year, circuit, driver, stint, compound, stint_length,
+      peak_age          -- tire age of the fastest fuel-corrected lap
+      best_pace, worst_pace
+      degradation_s     -- median(worst 3 fuel-corrected laps)
+                           − median(best 3 fuel-corrected laps)
+
+    Only stints with >= MIN_STINT_LAPS green laps are included, so that both
+    peak_age and degradation_s are stable.
     """
-    curves = {}
-    df_train = df_train[df_train['compound'].isin(DRY_COMPOUNDS)].copy()
+    df = df[df['compound'].isin(DRY_COMPOUNDS)].copy()
+    sizes = df.groupby(['year', 'circuit', 'driver', 'stint']).size()
+    keep = sizes[sizes >= MIN_STINT_LAPS].index
+    df = df.set_index(['year', 'circuit', 'driver', 'stint']).loc[keep].reset_index()
 
-    # Per (compound, circuit)
-    for (compound, circuit), grp in df_train.groupby(['compound', 'circuit']):
-        fit = fit_quadratic(grp)
-        if fit is None:
-            continue
-        curves[(compound, circuit)] = fit
-
-    # Per compound fallback (pool across all circuits)
-    for compound, grp in df_train.groupby('compound'):
-        fit = fit_quadratic(grp)
-        if fit is None:
-            continue
-        curves[(compound, '__GLOBAL__')] = fit
-
-    return curves
-
-
-def lookup_curve(curves: dict, compound: str, circuit: str) -> dict | None:
-    if (compound, circuit) in curves:
-        return curves[(compound, circuit)]
-    if (compound, '__GLOBAL__') in curves:
-        return curves[(compound, '__GLOBAL__')]
-    return None
-
-
-def predict_delta_pace(curve: dict, tire_age: float) -> float:
-    a, b, c = curve['coef']
-    return c + a * tire_age + b * tire_age * tire_age
-
-
-def evaluate_on_holdout(df_test: pd.DataFrame, curves: dict) -> pd.DataFrame:
-    """Predict delta_pace per row; return per-compound MAE and pooled R^2."""
-    df_test = df_test[df_test['compound'].isin(DRY_COMPOUNDS)].copy()
-    preds = []
-    for _, row in df_test.iterrows():
-        curve = lookup_curve(curves, row['compound'], row['circuit'])
-        if curve is None:
-            preds.append(np.nan)
-            continue
-        preds.append(predict_delta_pace(curve, float(row['tire_age'])))
-    df_test = df_test.assign(pred_delta_pace=preds).dropna(
-        subset=['pred_delta_pace'])
     rows = []
-    for compound, grp in df_test.groupby('compound'):
-        err = (grp['delta_pace'] - grp['pred_delta_pace']).abs()
+    for (year, circuit, driver, stint), grp in df.groupby(
+            ['year', 'circuit', 'driver', 'stint']):
+        fcp = grp['fuel_corrected_pace'].to_numpy()
+        ages = grp['tire_age'].to_numpy()
+        best_idx = int(np.argmin(fcp))
+        best_3  = float(np.median(np.sort(fcp)[:3]))
+        worst_3 = float(np.median(np.sort(fcp)[-3:]))
         rows.append({
-            'compound': compound,
-            'n_laps':   int(len(grp)),
-            'mae_s':    round(float(err.mean()), 3),
-            'r2':       round(r2_score_manual(
-                grp['delta_pace'].to_numpy(),
-                grp['pred_delta_pace'].to_numpy()), 3),
+            'year':         int(year),
+            'circuit':      circuit,
+            'driver':       driver,
+            'stint':        int(stint),
+            'compound':     grp['compound'].iloc[0],
+            'stint_length': int(len(grp)),
+            'peak_age':     int(ages[best_idx]),
+            'best_pace':    best_3,
+            'worst_pace':   worst_3,
+            'degradation_s': worst_3 - best_3,
         })
     return pd.DataFrame(rows)
 
 
-def compare_to_live_slope(df_test: pd.DataFrame, curves: dict) -> float:
+def compute_pace_profile(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Return R^2 of the in-stint linear slope estimator (the existing
-    pit-window pipeline's deg_delta) evaluated on the same 2024 rows.
+    Bucket laps by (compound, era, tire-age bin) and return the mean
+    delta_pace in each cell. `era` ∈ {'2022-2023', '2024'}.
     """
-    df_test = df_test[df_test['compound'].isin(DRY_COMPOUNDS)].copy()
-    df_test = df_test.sort_values(['driver', 'stint', 'lap_number']).copy()
-    preds = []
-    for (driver, stint), grp in df_test.groupby(['driver', 'stint']):
-        grp_sorted = grp.sort_values('tire_age')
-        if len(grp_sorted) < 3:
-            preds.extend([np.nan] * len(grp))
+    df = df[df['compound'].isin(DRY_COMPOUNDS)].copy()
+    df['era'] = np.where(df['year'].isin(TRAIN_YEARS), '2022-2023', '2024')
+    df['age_bin'] = pd.cut(df['tire_age'], bins=AGE_BINS, labels=AGE_LABELS,
+                           right=False, include_lowest=True)
+    grouped = (df.groupby(['compound', 'era', 'age_bin'], observed=True)
+                 ['delta_pace']
+                 .agg(['mean', 'median', 'count'])
+                 .reset_index()
+                 .rename(columns={'mean': 'mean_delta_s',
+                                  'median': 'median_delta_s',
+                                  'count': 'n_laps'}))
+    return grouped
+
+
+def compute_peak_age_stats(stint_summaries: pd.DataFrame) -> pd.DataFrame:
+    """Per-compound central tendency of peak_age, split by era."""
+    s = stint_summaries.copy()
+    s['era'] = np.where(s['year'].isin(TRAIN_YEARS), '2022-2023', '2024')
+    rows = []
+    for (compound, era), grp in s.groupby(['compound', 'era']):
+        rows.append({
+            'compound':   compound,
+            'era':        era,
+            'n_stints':   int(len(grp)),
+            'median_peak_age': float(grp['peak_age'].median()),
+            'mean_peak_age':   round(float(grp['peak_age'].mean()), 2),
+            'std_peak_age':    round(float(grp['peak_age'].std(ddof=1)), 2),
+        })
+    return pd.DataFrame(rows)
+
+
+def compute_stint_length_correlation(stint_summaries: pd.DataFrame) -> pd.DataFrame:
+    """Per-compound Pearson correlation between stint_length and degradation_s."""
+    rows = []
+    for compound, grp in stint_summaries.groupby('compound'):
+        if len(grp) < MIN_CELL_STINTS:
             continue
-        x = grp_sorted['tire_age'].to_numpy(dtype=float)
-        y = grp_sorted['delta_pace'].to_numpy(dtype=float)
-        slope = float(np.polyfit(x, y, 1)[0])
-        for age in grp['tire_age']:
-            preds.append(slope * float(age))
-    df_test = df_test.assign(live_pred=preds).dropna(subset=['live_pred'])
-    return r2_score_manual(
-        df_test['delta_pace'].to_numpy(),
-        df_test['live_pred'].to_numpy())
+        x = grp['stint_length'].to_numpy(dtype=float)
+        y = grp['degradation_s'].to_numpy(dtype=float)
+        mask = np.isfinite(x) & np.isfinite(y)
+        if mask.sum() < MIN_CELL_STINTS or np.std(x[mask]) == 0:
+            continue
+        r = float(np.corrcoef(x[mask], y[mask])[0, 1])
+        # Linear fit for plotting / reporting
+        slope, intercept = np.polyfit(x[mask], y[mask], 1)
+        rows.append({
+            'compound':        compound,
+            'n_stints':        int(mask.sum()),
+            'pearson_r':       round(r, 3),
+            'slope_s_per_lap': round(float(slope), 3),
+            'intercept_s':     round(float(intercept), 3),
+        })
+    return pd.DataFrame(rows)
 
 
-def plot_degradation_curves(df_full: pd.DataFrame, curves: dict,
-                            out_path: Path) -> None:
-    """Three-panel (SOFT/MEDIUM/HARD) overlay: circuit curves + 2024 scatter."""
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
-    age_grid = np.linspace(0, 40, 200)
-    df_2024 = df_full[df_full['year'].isin(TEST_YEARS)].copy()
+COMPOUND_COLOR = {'SOFT': '#e74c3c', 'MEDIUM': '#f1c40f', 'HARD': '#2c3e50'}
 
-    for ax, compound in zip(axes, DRY_COMPOUNDS):
-        # Scatter: 2024 observations
-        grp = df_2024[df_2024['compound'] == compound]
-        ax.scatter(grp['tire_age'], grp['delta_pace'],
-                   s=6, alpha=0.08, color='grey',
-                   label='2024 green laps' if compound == 'SOFT' else None)
 
-        # Per-circuit curves
-        per_circuit = [(k, v) for k, v in curves.items()
-                       if k[0] == compound and k[1] != '__GLOBAL__']
-        for (_, _), fit in per_circuit:
-            a, b, c = fit['coef']
-            y_curve = c + a * age_grid + b * age_grid ** 2
-            ax.plot(age_grid, y_curve, color='steelblue',
-                    alpha=0.3, linewidth=1)
-
-        # Global fallback: heavy red line
-        if (compound, '__GLOBAL__') in curves:
-            a, b, c = curves[(compound, '__GLOBAL__')]['coef']
-            y_curve = c + a * age_grid + b * age_grid ** 2
-            ax.plot(age_grid, y_curve, color='crimson',
-                    linewidth=2.5, label=f'{compound} global fit')
-
-        ax.set_title(f'{compound}')
-        ax.set_xlabel('Tire age (laps)')
-        if compound == 'SOFT':
-            ax.set_ylabel('Delta pace vs baseline (s)')
+def plot_pace_profile(profile: pd.DataFrame, out_path: Path) -> None:
+    """U-shape: mean delta_pace per age-bucket, per compound, per era."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    for ax, era in zip(axes, ['2022-2023', '2024']):
+        era_df = profile[profile['era'] == era]
+        for compound in DRY_COMPOUNDS:
+            sub = (era_df[era_df['compound'] == compound]
+                   .sort_values('age_bin'))
+            if sub.empty:
+                continue
+            x = np.arange(len(sub))
+            ax.plot(x, sub['mean_delta_s'].to_numpy(),
+                    marker='o', linewidth=2,
+                    color=COMPOUND_COLOR[compound],
+                    label=compound)
+            ax.set_xticks(x)
+            ax.set_xticklabels(sub['age_bin'].astype(str), rotation=0)
+        ax.set_title(f'{era} green laps')
+        ax.set_xlabel('Tire age bucket (laps)')
         ax.axhline(0, color='black', linestyle=':', linewidth=1)
-        ax.legend(loc='upper left', fontsize=8)
+        ax.legend(loc='upper left', fontsize=9, title='Compound')
+    axes[0].set_ylabel('Mean delta vs peak pace (s)')
+    fig.suptitle('Tire pace profile across a stint '
+                 '— U-shape: warm-up → peak → degradation',
+                 fontweight='bold', fontsize=12)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
 
-    fig.suptitle('Tire Degradation — per-(compound, circuit) quadratic fits '
-                 '(2022-2023 train; 2024 scatter)',
+
+def plot_peak_age_distribution(stint_summaries: pd.DataFrame,
+                               out_path: Path) -> None:
+    """Per-compound box plot of peak_age (stint-level)."""
+    fig, ax = plt.subplots(figsize=(9, 5))
+    data = [stint_summaries.loc[stint_summaries['compound'] == c, 'peak_age']
+                            .to_numpy()
+            for c in DRY_COMPOUNDS]
+    bp = ax.boxplot(data, labels=DRY_COMPOUNDS, patch_artist=True,
+                    showmeans=True, widths=0.55)
+    for patch, compound in zip(bp['boxes'], DRY_COMPOUNDS):
+        patch.set_facecolor(COMPOUND_COLOR[compound])
+        patch.set_alpha(0.75)
+    medians = [float(np.median(d)) for d in data]
+    for i, m in enumerate(medians, start=1):
+        ax.annotate(f'median {m:.0f}', xy=(i, m),
+                    xytext=(i + 0.18, m),
+                    fontsize=9, va='center', color='black')
+    ax.set_ylabel('Tire age of fastest lap (laps)')
+    ax.set_xlabel('Compound')
+    ax.set_title('Peak-pace tire age by compound (per stint, all years)',
+                 fontweight='bold', fontsize=12)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def plot_stint_length_vs_degradation(stint_summaries: pd.DataFrame,
+                                     corr_table: pd.DataFrame,
+                                     out_path: Path) -> None:
+    """Three-panel scatter with per-compound regression line."""
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+    corr_lookup = corr_table.set_index('compound').to_dict('index')
+    for ax, compound in zip(axes, DRY_COMPOUNDS):
+        sub = stint_summaries[stint_summaries['compound'] == compound]
+        ax.scatter(sub['stint_length'], sub['degradation_s'],
+                   s=14, alpha=0.35,
+                   color=COMPOUND_COLOR[compound],
+                   edgecolor='none')
+        if compound in corr_lookup:
+            info = corr_lookup[compound]
+            xgrid = np.linspace(sub['stint_length'].min(),
+                                sub['stint_length'].max(), 50)
+            ygrid = info['intercept_s'] + info['slope_s_per_lap'] * xgrid
+            ax.plot(xgrid, ygrid, color='black', linewidth=1.8,
+                    linestyle='--',
+                    label=f"r={info['pearson_r']:+.2f}, "
+                          f"slope={info['slope_s_per_lap']:+.2f}s/lap")
+            ax.legend(loc='upper left', fontsize=9)
+        ax.set_title(compound)
+        ax.set_xlabel('Stint length (laps)')
+        if compound == 'SOFT':
+            ax.set_ylabel('Degradation (worst-3 − best-3, s)')
+        ax.axhline(0, color='black', linestyle=':', linewidth=1)
+    fig.suptitle('Stint length vs. end-of-stint degradation magnitude',
                  fontweight='bold', fontsize=12)
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -342,44 +387,49 @@ if __name__ == '__main__':
     print(f'Compound distribution:')
     print(df['compound'].value_counts().to_string())
 
-    # Fit curves on training years only
-    df_train = df[df['year'].isin(TRAIN_YEARS)].copy()
-    print(f'\nTraining observations: {len(df_train):,}')
+    # (1) Stint-level summaries
+    stint_summaries = compute_stint_summaries(df)
+    print(f'\nStint summaries: {len(stint_summaries):,} stints '
+          f'(>= {MIN_STINT_LAPS} green laps each)')
+    print(stint_summaries.groupby('compound')['stint_length']
+          .agg(['count', 'mean', 'median', 'max'])
+          .round(2).to_string())
 
-    curves = fit_all_curves(df_train)
-    print(f'Fitted {len(curves)} (compound, circuit) curves '
-          f'(includes compound-global fallbacks).')
+    # (2) Pace profile
+    profile = compute_pace_profile(df)
 
+    # (3) Peak age + stint length correlation
+    peak_stats = compute_peak_age_stats(stint_summaries)
+    print('\n=== Peak-pace tire age (by compound, era) ===')
+    print(peak_stats.to_string(index=False))
+
+    corr_table = compute_stint_length_correlation(stint_summaries)
+    print('\n=== Stint length vs degradation (Pearson r, per compound) ===')
+    print(corr_table.to_string(index=False))
+
+    # Save artifact
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump({'curves': curves,
-                 'train_years': TRAIN_YEARS,
-                 'test_years':  TEST_YEARS}, MODEL_PATH)
-    print(f'Saved: {MODEL_PATH}')
+    joblib.dump({
+        'stint_summaries':       stint_summaries,
+        'pace_profile':          profile,
+        'peak_age_stats':        peak_stats,
+        'stint_length_corr':     corr_table,
+        'age_bins':              AGE_BINS,
+        'age_labels':            AGE_LABELS,
+        'train_years':           TRAIN_YEARS,
+        'test_years':            TEST_YEARS,
+    }, MODEL_PATH)
+    print(f'\nSaved: {MODEL_PATH}')
 
-    # Print a compact training R2 summary
-    rows = []
-    for (compound, circuit), fit in curves.items():
-        rows.append({'compound': compound, 'circuit': circuit,
-                     'n_laps': fit['n_laps'],
-                     'r2_train': round(fit['r2_train'], 3)})
-    summary = pd.DataFrame(rows).sort_values(['compound', 'circuit'])
-    print('\nTraining fit summary (top 15 rows):')
-    print(summary.head(15).to_string(index=False))
-
-    # Evaluate on 2024
-    df_test = df[df['year'].isin(TEST_YEARS)].copy()
-    holdout_summary = evaluate_on_holdout(df_test, curves)
-    print('\n=== 2024 holdout (per compound) ===')
-    print(holdout_summary.to_string(index=False))
-
-    live_slope_r2 = compare_to_live_slope(df_test, curves)
-    print(f'\nLive in-stint slope estimator R^2 on same rows: '
-          f'{live_slope_r2:.3f}')
-    print('(Curve-based predictions should explain more variance '
-          'than the naive live slope.)')
-
-    # Figure
-    plot_degradation_curves(df, curves,
-                            FIGURES_DIR / 'degradation_curves.png')
-    print(f'\nFigure saved: {FIGURES_DIR / "degradation_curves.png"}')
+    # Figures
+    plot_pace_profile(profile,
+                      FIGURES_DIR / 'degradation_pace_profile.png')
+    plot_peak_age_distribution(stint_summaries,
+                               FIGURES_DIR / 'peak_age_by_compound.png')
+    plot_stint_length_vs_degradation(stint_summaries, corr_table,
+                                     FIGURES_DIR / 'stint_length_vs_degradation.png')
+    print(f'\nFigures saved to {FIGURES_DIR}/')
+    print('  - degradation_pace_profile.png')
+    print('  - peak_age_by_compound.png')
+    print('  - stint_length_vs_degradation.png')
     print('\nDone.')
