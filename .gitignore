@@ -1,8 +1,10 @@
 # FastF1 cache — large and fully regenerable, do not commit
+f1-cache/2020/
 f1-cache/2021/
 f1-cache/2022/
 f1-cache/2023/
 f1-cache/2024/
+f1-cache/2025/
 f1-cache/fastf1_http_cache.sqlite
 
 # Python
