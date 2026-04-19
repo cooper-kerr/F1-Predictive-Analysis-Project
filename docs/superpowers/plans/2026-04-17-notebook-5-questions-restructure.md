@@ -740,7 +740,7 @@ Use `NotebookEdit` with `edit_mode: "replace"`, `cell_id: "7dfa878ba723"`, `cell
 
 **Question:** how do track temperature, air temperature, and related weather covariates influence lap pace, and does tire compound modulate that sensitivity?
 
-**Setup:** we load five 2024 and 2025 race sessions (Bahrain, Saudi Arabia, Australia, Japan, China) with weather telemetry, merge per-lap weather onto each lap record, and fit an OLS regression of `LapTime_Seconds` on `C(Year) + C(Race) + C(Compound) + TrackTemp + AirTemp + Pressure + Humidity + WindSpeed + WindDirection` with HC2 robust standard errors. To test whether temperature sensitivity is compound-dependent, we extend the specification with a `C(Compound) * TrackTemp` interaction. Residual-vs-fitted and Q-Q plots confirm OLS assumptions are not badly violated. This section connects directly to §5.1: hotter tracks accelerate degradation, so the per-compound quadratic curves are effectively a cross-section at average temperature.
+**Setup:** we load five 2024 and 2025 race sessions (Bahrain, Saudi Arabia, Australia, Japan, China) with weather telemetry, merge per-lap weather onto each lap record, and fit an OLS regression of `LapTime_Seconds` on `C(Year) + C(Race) + C(Compound) + TrackTemp + AirTemp + Pressure + Humidity + WindSpeed + WindDirection` with HC2 robust standard errors. To test whether temperature sensitivity is compound-dependent, we extend the specification with a `C(Compound) * TrackTemp` interaction. Residual-vs-fitted and Q-Q plots confirm OLS assumptions are not badly violated. This section connects directly to §5.1: hotter tracks accelerate tire wear, so the stint-level pace profiles there are effectively cross-sections at each circuit's average track temperature.
 ```
 
 - [ ] **Step 2: Replace cell `772cdb39-4263-41c2-8eec-c9b925c69104` (weather regression + plot code)**
@@ -861,7 +861,7 @@ Use `NotebookEdit` with `edit_mode: "replace"`, `cell_id: "c89b58b9-79ef-43b4-9e
 
 3. **OLS assumptions are defensible.** Residuals vs fitted show no strong heteroscedastic pattern, and the Q-Q plot is near-linear through the centre with only mild tail deviation. HC2 robust standard errors further insulate the coefficient p-values from residual non-normality.
 
-4. **Connection to §5.1.** Because track temperature systematically shifts per-compound pace, the tire degradation curves in §5.1 are implicitly fitted at each circuit's average track temperature. Extending the degradation model with a `TrackTemp` interaction is a natural future step — the infrastructure is in place.
+4. **Connection to §5.1.** Because track temperature systematically shifts per-compound pace, the stint-level pace profiles, peak-age statistics, and stint-length correlations in §5.1 are implicitly measured at each circuit's average track temperature. Stratifying §5.1's analysis by track-temperature bucket is a natural next step — the weather data joined here is the bridge.
 ```
 
 - [ ] **Step 4: Execute the three cells in Jupyter**
