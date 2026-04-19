@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Restructure `notebooks/01_milestone_report.ipynb` to make exactly 5 research questions explicit end-to-end (§1 intro, §4 methods, §5 results, §9 conclusions), build a real per-compound tire degradation model to back the §5.1 claim, and merge undercut/overcut into one pit-strategy section.
+**Goal:** Restructure `notebooks/01_milestone_report.ipynb` to make exactly 5 research questions explicit end-to-end (§1 intro, §4 methods, §5 results, §9 conclusions), add a real stint-level tire degradation analysis to back the §5.1 claim (pace profile U-shape, peak age by compound, stint-length vs degradation correlation), and merge undercut/overcut into one pit-strategy section.
 
 **Architecture:** One new Python script (`scripts/build_degradation_dataset.py`) following the established build-script pattern (cache-first, `--rebuild` flag, joblib artifact dict). All narrative + results changes happen inside the existing milestone notebook via cell add / cell edit / cell delete operations. Existing models (position RF, pit-window GBM, undercut LR+XGBoost, overcut LR+XGBoost) and their artifacts are not modified.
 
@@ -68,12 +68,16 @@
 ## Files Touched
 
 - **Create:** `scripts/build_degradation_dataset.py` — new tire-degradation pipeline
-- **Create:** `data/f1_degradation_dataset.csv` — filtered, fuel-corrected lap dataset
-- **Create:** `models/f1_degradation_curves.pkl` — fitted quadratic curves joblib dict
-- **Create:** `outputs/figures/degradation_curves.png` — three-panel curve overlay
+- **Create:** `data/f1_degradation_dataset.csv` — filtered, fuel-corrected lap dataset with peak-pace baseline + delta_pace
+- **Create:** `models/f1_degradation_analysis.pkl` — joblib dict: `stint_summaries`, `pace_profile`, `peak_age_stats`, `stint_length_corr`
+- **Create:** `outputs/figures/degradation_pace_profile.png` — U-shape profile, per compound, two-era panels
+- **Create:** `outputs/figures/peak_age_by_compound.png` — per-compound peak-pace age distribution
+- **Create:** `outputs/figures/stint_length_vs_degradation.png` — three-panel scatter with regression
 - **Create:** `outputs/figures/weather_compound_sensitivity.png` — per-compound temp regression
 - **Create:** `outputs/figures/weather_diagnostics.png` — residual + Q-Q plots
 - **Modify:** `notebooks/01_milestone_report.ipynb` — cells across §1, §4, §5, §6, §7, §8, §9
+
+Note: Tasks 1-3 below describe the original per-(compound, circuit) quadratic-curve approach. That work was completed and committed, but on 2024 holdout the curves underperformed the naive live-slope estimator because the pace profile is U-shaped. The analysis was pivoted to the stint-level view in commit `c995962`; the script and artifacts now reflect that pivot. Tasks 4, 8, 10 below describe §5.1, §4.1 Methods, and §9 Conclusions in the pivoted framing — that is the live spec.
 
 ---
 
@@ -608,7 +612,9 @@ git commit -m "Evaluate tire degradation curves on 2024 + plot (Task 3/10)"
 
 ## Task 4: Add §5.1 Tire Degradation notebook cells
 
-Insert four new cells at the very start of §5 Results (before the existing §5.1 Race-Position section, which will be renumbered to §5.5 in Task 9). Uses the `NotebookEdit` tool with `edit_mode: "insert"` and `cell_id` set to the preceding cell.
+Insert six new cells at the very start of §5 Results (before the existing §5.1 Race-Position section, which will be renumbered to §5.5 in Task 9). Uses the `NotebookEdit` tool with `edit_mode: "insert"` and `cell_id` set to the preceding cell.
+
+The §5.1 story is **stint-level**, not per-lap curve prediction. Three findings in order: (1) pace profile is U-shaped (warm-up → peak → degradation), (2) peak-pace tire age differs cleanly by compound, (3) stint length correlates with end-of-stint degradation magnitude.
 
 **Files:**
 - Modify: `notebooks/01_milestone_report.ipynb`
@@ -618,16 +624,16 @@ Insert four new cells at the very start of §5 Results (before the existing §5.
 Use `NotebookEdit` with `edit_mode: "insert"`, `cell_id: "e780defe1c59"`, `cell_type: "markdown"`, and content:
 
 ```markdown
-## 5.1 Tire Degradation Model — per-(compound, circuit) quadratic fits
+## 5.1 Tire Degradation — Pace Profile Across a Stint
 
-**Question:** for a given tire compound at a given circuit, how does lap pace decay as a function of tire age?
+**Question:** how does lap pace evolve across a stint, and what does that tell us about compound-specific peak-grip windows and stint-length tradeoffs?
 
-**Setup:** we filter 2022-2024 race sessions to green-flag laps only (no Safety Car, no VSC, no pit-in or pit-out), apply the standard fuel correction `− (lap − 1) · 1.8 · 0.035`, and compute `delta_pace` as the fuel-corrected lap time minus the per-stint baseline (median of the first three green laps of the stint). Per `(compound, circuit)` we fit `delta_pace(age) = a · age + b · age²` on 2022-2023 observations (minimum 30 laps per cell) and evaluate on the 2024 holdout. Intermediate / wet compounds are excluded; circuits with too few training laps fall back to a compound-global fit.
+**Setup:** we filter 2022-2024 race sessions to green-flag laps only (no Safety Car, no VSC, no pit-in or pit-out) and apply the standard fuel correction `− (lap − 1) · 1.8 · 0.035`. For each stint we anchor a **peak-pace baseline** — the median of that stint's **fastest 3** fuel-corrected laps — and define `delta_pace` as lost time versus that peak (≥ 0 by construction, ~ 0 at the peak). This anchor avoids the warm-up contamination that biases a first-laps baseline. Stints with fewer than 8 green laps are dropped. Intermediate / wet compounds are excluded. The 2022-2023 races form the training era and 2024 the holdout, but the analysis is descriptive: we look for stable patterns across eras rather than training a predictor.
 
-**Pipeline:** `scripts/build_degradation_dataset.py`. Artefacts: `data/f1_degradation_dataset.csv`, `models/f1_degradation_curves.pkl`, `outputs/figures/degradation_curves.png`.
+**Pipeline:** `scripts/build_degradation_dataset.py`. Artefacts: `data/f1_degradation_dataset.csv`, `models/f1_degradation_analysis.pkl`, and three figures: `outputs/figures/degradation_pace_profile.png`, `peak_age_by_compound.png`, `stint_length_vs_degradation.png`.
 ```
 
-- [ ] **Step 2: Insert the §5.1 evaluation code cell after the intro**
+- [ ] **Step 2: Insert the §5.1 analysis-loading code cell after the intro**
 
 Use `NotebookEdit` with `edit_mode: "insert"`, `cell_id` set to the ID of the markdown cell just created (look it up after the insert), `cell_type: "code"`, and content:
 
@@ -641,74 +647,63 @@ ROOT      = Path.cwd() if Path.cwd().name != 'notebooks' else Path.cwd().parent
 DATA_DIR  = ROOT / 'data'
 MODEL_DIR = ROOT / 'models'
 
-DRY = ['SOFT', 'MEDIUM', 'HARD']
+deg_art   = joblib.load(MODEL_DIR / 'f1_degradation_analysis.pkl')
+stint_summaries  = deg_art['stint_summaries']
+peak_age_stats   = deg_art['peak_age_stats']
+stint_length_corr = deg_art['stint_length_corr']
 
-deg_df   = pd.read_csv(DATA_DIR / 'f1_degradation_dataset.csv')
-deg_art  = joblib.load(MODEL_DIR / 'f1_degradation_curves.pkl')
-curves   = deg_art['curves']
-
-def r2(y_true, y_pred):
-    y_true = np.asarray(y_true, dtype=float)
-    y_pred = np.asarray(y_pred, dtype=float)
-    ss_res = np.sum((y_true - y_pred) ** 2)
-    ss_tot = np.sum((y_true - y_true.mean()) ** 2)
-    return float('nan') if ss_tot <= 1e-9 else 1.0 - ss_res / ss_tot
-
-def predict(curve, age):
-    a, b = curve['coef']
-    return a * age + b * age * age
-
-def lookup(compound, circuit):
-    return curves.get((compound, circuit)) or curves.get((compound, '__GLOBAL__'))
-
-df_2024 = deg_df[(deg_df['year'] == 2024) & (deg_df['compound'].isin(DRY))].copy()
-df_2024['pred_delta'] = df_2024.apply(
-    lambda r: predict(lookup(r['compound'], r['circuit']), float(r['tire_age']))
-        if lookup(r['compound'], r['circuit']) is not None else np.nan, axis=1)
-df_2024 = df_2024.dropna(subset=['pred_delta'])
-
-summary = df_2024.groupby('compound').apply(lambda g: pd.Series({
-    'n_laps': int(len(g)),
-    'mae_s':  round(float((g['delta_pace'] - g['pred_delta']).abs().mean()), 3),
-    'r2':     round(r2(g['delta_pace'].values, g['pred_delta'].values), 3),
-})).reset_index()
-
-print('2024 holdout performance by compound:')
-print(summary.to_string(index=False))
+print(f'Stint summaries: {len(stint_summaries):,} stints '
+      f'(SOFT / MEDIUM / HARD, >= 8 green laps each)')
+print()
+print('=== Peak-pace tire age by compound (per-stint medians) ===')
+print(peak_age_stats.to_string(index=False))
+print()
+print('=== Stint length vs end-of-stint degradation (Pearson r) ===')
+print(stint_length_corr.to_string(index=False))
 ```
 
-- [ ] **Step 3: Insert the curve-figure display cell**
+- [ ] **Step 3: Insert the pace-profile figure display cell**
 
-Use `NotebookEdit` with `edit_mode: "insert"`, `cell_id` set to the ID of the evaluation cell just created, `cell_type: "code"`, and content:
+Use `NotebookEdit` with `edit_mode: "insert"`, `cell_id` set to the ID of the code cell just created, `cell_type: "code"`, and content:
 
 ```python
 from IPython.display import Image, display
 
 FIGURES_DIR = ROOT / 'outputs' / 'figures'
-display(Image(str(FIGURES_DIR / 'degradation_curves.png')))
+display(Image(str(FIGURES_DIR / 'degradation_pace_profile.png')))
 ```
 
-- [ ] **Step 4: Insert the §5.1 findings markdown cell**
+- [ ] **Step 4: Insert the peak-age + stint-length figure display cell**
 
-Use `NotebookEdit` with `edit_mode: "insert"`, `cell_id` set to the ID of the figure cell, `cell_type: "markdown"`, and content:
+Use `NotebookEdit` with `edit_mode: "insert"`, `cell_id` set to the ID of the previous cell, `cell_type: "code"`, and content:
+
+```python
+display(Image(str(FIGURES_DIR / 'peak_age_by_compound.png')))
+display(Image(str(FIGURES_DIR / 'stint_length_vs_degradation.png')))
+```
+
+- [ ] **Step 5: Insert the §5.1 findings markdown cell**
+
+Use `NotebookEdit` with `edit_mode: "insert"`, `cell_id` set to the ID of the previous cell, `cell_type: "markdown"`, and content:
 
 ```markdown
 **Findings.**
 
-1. **Compound hierarchy is clean.** The SOFT compound degrades fastest (steepest per-circuit quadratic coefficients), HARD is shallowest, MEDIUM sits between. This matches qualitative expectations from the 2022-2024 Pirelli range.
+1. **Pace profile across a stint is U-shaped, not monotonic.** Every compound shows a warm-up of ~0.5–2.5 s/lap in the first five laps, settles into a plateau near its peak grip, then climbs back up as the tyre fatigues. The naive picture of "new tyre fast, old tyre slow" is wrong: a brand-new tyre on lap 1 is roughly as slow as a 25-lap-old one on MEDIUM. This pattern is stable across the 2022-2023 training and 2024 holdout panels.
 
-2. **Circuit variance is real but bounded.** Per-circuit curves for a given compound differ by roughly 0.1-0.3 s/lap at lap 20 of a stint — enough that pooling circuits would bias predictions, but small enough that the compound-global fallback is usable for unseen circuits in 2024.
+2. **Peak-pace tire age is a clean compound signature.** Median stint-level peak age is ≈ 10 laps on SOFT, ≈ 15 on MEDIUM, ≈ 22 on HARD — the same ordering and roughly the same magnitudes in both eras. This is strategically useful: the "optimal" pit lap is not the fastest lap of the stint; it is the lap at which the tyre has just passed peak and a fresh set will regain more time than it loses.
 
-3. **Curve-based prediction beats the live slope estimator.** The fitted curves explain substantially more of the 2024 delta-pace variance than the in-stint linear-slope `deg_delta` feature currently used in the pit-window pipeline. This is a direct candidate for plumbing through to the pit-window model in future work (out of scope here).
+3. **Stint length correlates with end-of-stint degradation on the harder compounds.** Per-stint degradation (median of worst 3 fuel-corrected laps − median of best 3) rises ~0.12 s for every extra lap of stint length, with Pearson *r* = 0.63 on HARD, 0.53 on MEDIUM, and 0.18 on SOFT. SOFT's weak correlation reflects how short and homogeneous its stints are; on MEDIUM and HARD the relationship is strong enough that stint-length is itself a useful degradation predictor.
 
-4. **Higher compound R² does not imply higher absolute degradation.** HARD can have a high R² with a small `a · age + b · age²` coefficient because the tyre is stable — variance around a flat curve is low. Interpret R² alongside the MAE column to distinguish "degrades predictably" from "degrades a lot."
+4. **Note on what this analysis does *not* do.** We do not fit a per-lap predictor of `delta_pace` here. An earlier iteration of the pipeline tried per-(compound, circuit) quadratic curves; on a 2024 temporal holdout it underperformed the naive live in-stint slope estimator. The U-shape is the reason — it cannot be captured by a quadratic anchored at age 0 that is fit to a dataset dominated by the plateau — which is itself a finding worth preserving for the downstream pit-window work.
 ```
 
-- [ ] **Step 5: Execute the new cells top-to-bottom in the notebook**
+- [ ] **Step 6: Execute the new cells top-to-bottom in the notebook**
 
 Open `notebooks/01_milestone_report.ipynb` in Jupyter (or run with `jupyter nbconvert --to notebook --execute`). Verify:
-- The evaluation table prints three rows (SOFT, MEDIUM, HARD) with sensible R² (typically 0.05 - 0.4) and MAE in the 0.1-0.4 s/lap range.
-- The figure displays as three panels.
+- The printout shows the peak-age-stats table with SOFT ≈ 10–11, MEDIUM ≈ 15–16, HARD ≈ 22–23 in both eras.
+- The printout shows the stint-length correlation table with HARD r ≈ 0.63, MEDIUM r ≈ 0.53, SOFT r ≈ 0.18.
+- Three figures render in order: pace profile (U-shape), peak age box plot, stint-length scatter.
 - No cell raises.
 
 Run for verification:
@@ -718,7 +713,7 @@ jupyter nbconvert --to notebook --execute --inplace notebooks/01_milestone_repor
 
 Abort and diagnose if any cell errors out.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add notebooks/01_milestone_report.ipynb
@@ -1016,17 +1011,23 @@ Our project is organised into five interconnected modelling pipelines, each targ
 
 ---
 
-### 4.1 Tire Degradation (per-(compound, circuit) quadratic fits)
+### 4.1 Tire Degradation (stint-level pace-profile analysis)
 
-**Target:** `delta_pace`, defined as fuel-corrected lap time minus the per-(driver, stint) baseline (median of the first three green laps of the stint).
+**Target:** `delta_pace`, defined as fuel-corrected lap time minus a per-(driver, stint) **peak-pace baseline** — the median of that stint's fastest three fuel-corrected laps. By construction `delta_pace` ≥ 0 and is ~ 0 at the stint's peak; it is lost time versus the tyre's best pace in that stint.
 
-**Features:** tire compound, circuit (pooled across 2022 and 2023), and tire age (`TyreLife`).
+**Features:** tire compound, tire age (`TyreLife`), and circuit are used as grouping keys rather than regressors. Era splits (2022-2023 vs 2024) are applied to check pattern stability.
 
-**Model:** For each `(compound, circuit)` pair in `{SOFT, MEDIUM, HARD} × (distinct 2022-2023 circuits)`, we fit `delta_pace(age) = a · age + b · age²` with `numpy.polyfit`. Cells with fewer than 30 training laps fall back to a compound-global curve pooled across all circuits for that compound.
+**Analysis.** Three descriptive views of the stint, each computed on `>= 8`-lap stints of dry compounds (`SOFT`, `MEDIUM`, `HARD`):
 
-**Train/test:** 2022-2023 for fitting, 2024 temporal holdout for evaluation (MAE per compound, R² per cell, comparison against the in-stint linear-slope estimator used in the pit-window pipeline).
+1. **Pace profile.** Mean `delta_pace` by `(compound, age-bucket)` where age buckets are `[0-5), [5-10), ..., [25-30), [30+)`. Plotted as three compound lines on each of two panels (2022-2023 vs 2024) so the U-shape (warm-up → peak → degradation) is directly visible.
 
-**Pipeline:** `scripts/build_degradation_dataset.py`.
+2. **Peak-pace age.** For each stint, the tire age of the fastest fuel-corrected lap. Central tendency (median, mean, std) per compound and per era.
+
+3. **Stint length vs degradation magnitude.** Per stint, `degradation_s = median(worst 3) − median(best 3)`. Pearson *r* computed against stint length within each compound; also the linear slope for plotting.
+
+**Why not a predictor:** we attempted per-(compound, circuit) quadratic curves first. On the 2024 temporal holdout they underperformed a naive live in-stint linear slope, because (a) the pace profile is U-shaped, not monotonic — a quadratic of tire age is the wrong functional form, and (b) per-circuit residual signal is dwarfed by per-stint driver/traffic noise. The descriptive stint-level view captures the structurally interesting and stable findings without overclaiming predictive accuracy.
+
+**Pipeline:** `scripts/build_degradation_dataset.py`. Artifact: `models/f1_degradation_analysis.pkl` — a joblib dict of DataFrames (`stint_summaries`, `pace_profile`, `peak_age_stats`, `stint_length_corr`).
 
 ---
 
@@ -1188,7 +1189,7 @@ jupyter nbconvert --to notebook --execute --inplace notebooks/01_milestone_repor
 
 Open the notebook in Jupyter. Scroll through §5 and confirm exactly this header order:
 
-1. `## 5.1 Tire Degradation Model — per-(compound, circuit) quadratic fits`
+1. `## 5.1 Tire Degradation — Pace Profile Across a Stint`
 2. `## 5.2 Weather & Temperature Effects on Lap Time`
 3. `## 5.3 Pit-Window Forecasting — Gradient Boosted Regressor`
 4. `## 5.4 Pit Strategy: Undercut vs Overcut`
@@ -1222,7 +1223,7 @@ Use `NotebookEdit` with `edit_mode: "replace"`, `cell_id: "55223489ed32"`, `cell
 
 The five research questions have concrete, data-backed answers:
 
-**1. How does lap pace decay with tire age?** The per-(compound, circuit) quadratic fits explain a meaningful share of 2024 holdout delta-pace variance, with SOFT the steepest-degrading compound, HARD the shallowest, and MEDIUM between. Per-circuit variance is real but small enough that a compound-global fallback serves unseen circuits adequately. The curve-based predictor beats the naive in-stint linear-slope estimator currently used as an input feature by the pit-window model — a direct candidate for downstream improvement.
+**1. How does lap pace evolve across a stint?** Not monotonically — the pace profile is U-shaped. Every compound warms up, plateaus near peak grip, then degrades. Median peak-pace age separates cleanly by compound (≈ 10 laps SOFT, ≈ 15 MEDIUM, ≈ 22 HARD) and is stable across the 2022-2023 and 2024 eras, making it a robust strategic anchor for pit timing. End-of-stint degradation magnitude rises roughly 0.12 s per extra lap of stint length, with a strong correlation on HARD (*r* = 0.63) and MEDIUM (*r* = 0.53) and a weaker one on SOFT (*r* = 0.18) where stints are short and homogeneous. A per-lap predictor was attempted and abandoned — a quadratic of tire age cannot represent the U-shape — so §5.1 is descriptive rather than predictive, which is itself a finding for the downstream pit-window model.
 
 **2. How do weather and temperature affect lap time?** Track temperature is the dominant weather covariate, statistically significant at the 95% level under HC2 robust standard errors. The `C(Compound) * TrackTemp` interaction is significant too, confirming that compounds degrade at different rates as track temperature rises — consistent with the §5.1 finding that degradation curves are implicitly conditioned on temperature. Residuals-vs-fitted and Q-Q plots show OLS assumptions hold reasonably well.
 
@@ -1295,7 +1296,7 @@ Every proposal milestone is complete. The final deliverables are:
 - [x] Circuit pit-loss computation from real pit-in / pit-out deltas
 
 **Models**
-- [x] Tire degradation per-(compound, circuit) quadratic curves — trained on 2022-2023, evaluated on 2024 (`scripts/build_degradation_dataset.py`, artifact `models/f1_degradation_curves.pkl`).
+- [x] Tire degradation stint-level analysis — peak-pace anchor, pace profile across tire-age buckets, peak-age by compound, stint-length vs degradation correlation, on 2022-2024 (`scripts/build_degradation_dataset.py`, artifact `models/f1_degradation_analysis.pkl`).
 - [x] Weather/temperature OLS with `C(Compound) * TrackTemp` interaction and HC2 robust SEs (notebook §5.2).
 - [x] Pit-window Gradient Boosted Regressor — tuned via grid search, MAE 2.26 laps on 2024 holdout (`02_pit_window_forecasting.ipynb`).
 - [x] Undercut Logistic Regression + XGBoost — 77% accuracy, ROC-AUC 0.83 (`03_undercut_prediction.ipynb`, `scripts/build_undercut_dataset.py`).
@@ -1303,7 +1304,7 @@ Every proposal milestone is complete. The final deliverables are:
 - [x] Race-position Random Forest — trained per checkpoint on 2022-2023, tested on 2024, predictability curve from 65% @ lap 5 to 89% @ lap 50 (`scripts/build_position_dataset.py`).
 
 **Analysis & visualisation**
-- [x] Three-panel tire degradation curve overlay (§5.1).
+- [x] Three tire-degradation figures: pace-profile U-shape (2022-2023 vs 2024), peak-age box plot by compound, stint-length vs degradation scatter (§5.1).
 - [x] Compound × track-temperature sensitivity plot + residual and Q-Q diagnostics (§5.2).
 - [x] SHAP attribution on both over/undercut models (beeswarm + bar).
 - [x] Probability calibration plots on both pit-strategy models.
@@ -1332,7 +1333,7 @@ Every model here is trained on **public timing data only**. The following source
 
 **4. Team strategy and radio.** The models are blind to team orders, teammate pairings, and tyre-allocation constraints. An overcut attempt on a teammate is treated identically to one on a rival — a simplification that visibly hurts F1 accuracy during intra-team battles.
 
-**5. Tire degradation model simplifications.** The §5.1 curves pool across drivers within a `(compound, circuit)` cell, so individual stint-management differences are averaged out. They assume in-stint degradation is the dominant signal and ignore track evolution (rubbering-in), fuel-induced weight transfer beyond the linear correction, and temperature drift across the race. Circuits with fewer than 30 training laps for a given compound fall back to a compound-global curve, which trades circuit specificity for sample size.
+**5. Tire degradation analysis simplifications.** The §5.1 analysis is descriptive: it reports the stint-level pace profile, per-compound peak age, and the stint-length vs degradation correlation, but does not produce a per-lap predictor of `delta_pace`. An early attempt at per-(compound, circuit) quadratic curves was rejected because (a) the pace profile is U-shaped rather than monotonic, so a quadratic of tire age is structurally the wrong form, and (b) per-circuit signal was dwarfed by driver/traffic noise on the 2024 holdout. The analysis also pools drivers within each compound (individual stint-management differences are averaged out) and ignores track evolution (rubbering-in), fuel-induced weight transfer beyond the linear correction, and temperature drift across a race.
 
 **6. Finite holdout size.** 2024 provides 15,619 pit-window observations, ~450 undercut attempts, and ~340 overcut attempts after SC/VSC filtering. That is enough to compute stable aggregate metrics but thin for slicing by circuit, compound, and context simultaneously. A few per-context cells in the overcut breakdown have n < 10 and should be treated as indicative only.
 
@@ -1354,7 +1355,7 @@ Open the notebook and visually confirm all acceptance criteria from the design s
 1. §1 lists exactly 5 numbered questions (Degradation → Weather → Pit Window → Pit Strategy → Position).
 2. §4 has subsections §4.1 through §4.6 in the same order.
 3. §5 has exactly six subsections §5.1 through §5.6 matching the same order + the Hungary dashboard.
-4. §5.1 shows a populated R²/MAE table and the three-panel curves figure.
+4. §5.1 shows the peak-age and stint-length-correlation tables, plus the three pivoted figures (pace profile, peak-age box plot, stint-length scatter).
 5. §5.2 shows two OLS summaries (baseline and interaction), the compound-sensitivity plot with CI bands, and the diagnostic plots.
 6. §5.4 is a single merged Pit Strategy section with one combined results table.
 7. §9 has exactly 5 numbered conclusion paragraphs in build-up order.
@@ -1376,10 +1377,12 @@ After all 10 tasks are committed:
 
 - [ ] Run the notebook one final time top-to-bottom: `jupyter nbconvert --to notebook --execute --inplace notebooks/01_milestone_report.ipynb --ExecutePreprocessor.timeout=900`
 - [ ] Confirm `git status` is clean.
-- [ ] Confirm all four new output artifacts exist:
-  - `models/f1_degradation_curves.pkl`
+- [ ] Confirm all six new output artifacts exist:
+  - `models/f1_degradation_analysis.pkl`
   - `data/f1_degradation_dataset.csv`
-  - `outputs/figures/degradation_curves.png`
+  - `outputs/figures/degradation_pace_profile.png`
+  - `outputs/figures/peak_age_by_compound.png`
+  - `outputs/figures/stint_length_vs_degradation.png`
   - `outputs/figures/weather_compound_sensitivity.png`
   - `outputs/figures/weather_diagnostics.png`
 - [ ] Confirm no regressions in existing numerical outputs: §5.3 (pit window MAE 2.26), §5.5 (position curve 65% → 89%), §5.6 Hungary dashboard still runs.
