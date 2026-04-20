@@ -2,7 +2,7 @@
 
 Data science project applying machine learning to Formula One race strategy using the [FastF1](https://docs.fastf1.dev/) API.
 
-**Authors:** Cooper Kerr, Isaac Middlemas — University of Utah
+**Authors:** Cooper Kerr, Isaac Middlemas, Minh Le — University of Utah
 
 ---
 
