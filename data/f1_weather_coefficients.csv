@@ -1,0 +1,16 @@
+term,coef,std_err,p_value
+C(Year)[2024],5460.4943,285.4617,0.0
+C(Year)[2025],5441.5852,284.5128,0.0
+C(Race)[T.Bahrain],-1.2011,1.2808,0.3483
+C(Race)[T.China],-12.8259,1.7742,0.0
+C(Race)[T.Japan],-23.379,1.7628,0.0
+C(Race)[T.Saudi Arabia],5.0734,1.1058,0.0
+C(Compound)[T.INTERMEDIATE],-6.855,1.5222,0.0
+C(Compound)[T.MEDIUM],0.2819,0.219,0.198
+C(Compound)[T.SOFT],0.5511,0.3552,0.1207
+TrackTemp,0.5508,0.0717,0.0
+AirTemp,-3.7675,0.2316,0.0
+Pressure,-5.1846,0.2742,0.0
+Humidity,-0.6562,0.0481,0.0
+WindSpeed,0.6877,0.1937,0.0004
+WindDirection,0.0037,0.0011,0.0006

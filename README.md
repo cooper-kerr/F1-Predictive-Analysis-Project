@@ -1,109 +1,153 @@
 # F1 Predictive Analysis Project
 
-Data science project applying machine learning to Formula One race strategy using the [FastF1](https://docs.fastf1.dev/) API.
+Data science project applying machine learning and statistical analysis to Formula One race strategy using the [FastF1](https://docs.fastf1.dev/) API.
 
 **Authors:** Cooper Kerr, Isaac Middlemas, Minh Le — University of Utah
 
----
-
 ## Research Questions
 
-| # | Question | Model | Status |
+| # | Question | Primary Implementation | Status |
 |---|---|---|---|
-| 1 | At what lap can a driver's final finishing position be predicted? | Random Forest Classifier | ✅ |
-| 2 | When will a driver's pit window open? | Gradient Boosted Machine (GBM) | ✅ |
-| 3 | Will pitting now (undercut) beat the car directly ahead? | Logistic Regression + XGBoost | ✅ |
+| 1 | How does lap pace evolve across a stint, and what does that imply for pit timing? | `scripts/build_degradation_dataset.py` | ✅ |
+| 2 | How do weather and temperature variables relate to lap time? | `scripts/build_weather_analysis.py` | ✅ |
+| 3 | When will a driver's pit window open? | `notebooks/02_pit_window_forecasting.ipynb` | ✅ |
+| 4 | When is an undercut or overcut likely to succeed? | `scripts/build_undercut_dataset.py`, `scripts/build_overcut_dataset.py` | ✅ |
+| 5 | How predictable is final finishing position as a race unfolds? | `scripts/build_position_dataset.py`, `scripts/build_position_comparison_analysis.py` | ✅ |
 
----
+## Canonical Report Workflow
+
+The final report notebook is [01_milestone_report.ipynb](notebooks/01_milestone_report.ipynb). It is intended to stay lightweight:
+
+- heavy data pulls and figure generation should happen in `scripts/`
+- the report notebook should mainly load saved datasets, models, and figures
+- notebooks `05` and `06` are companion notebooks that document the lighter framing now used in report sections `5.5` and `5.2`
+
+Current report-facing script ownership:
+
+- Tire degradation: [build_degradation_dataset.py](scripts/build_degradation_dataset.py)
+- Weather / temperature: [build_weather_analysis.py](scripts/build_weather_analysis.py)
+- Position comparison used in report `5.5`: [build_position_comparison_analysis.py](scripts/build_position_comparison_analysis.py)
+- Full position model artifacts still used elsewhere in the project: [build_position_dataset.py](scripts/build_position_dataset.py)
 
 ## Repository Structure
 
-```
+```text
 F1-Predictive-Analysis-Project/
 ├── notebooks/
-│   ├── 01_milestone_report.ipynb       # Full milestone report (all three questions)
-│   ├── 02_pit_window_forecasting.ipynb # Pit window forecasting pipeline
-│   └── 03_undercut_prediction.ipynb    # Undercut/overcut strategy prediction
+│   ├── 01_milestone_report.ipynb
+│   ├── 02_pit_window_forecasting.ipynb
+│   ├── 03_undercut_prediction.ipynb
+│   ├── 04_overcut_prediction.ipynb
+│   ├── 05_race_position_predictability_modeling.ipynb
+│   └── 06_temperature_effect_modeling.ipynb
 │
 ├── scripts/
-│   ├── build_undercut_dataset.py       # Builds f1_undercut_dataset.csv + trains model
-│   ├── build_overcut_dataset.py        # Builds f1_overcut_dataset.csv + trains model
-│   ├── test_undercut_model.py          # Interactive undercut model test harness (4 modes)
-│   └── test_overcut_model.py           # Interactive overcut model test harness (4 modes)
+│   ├── build_degradation_dataset.py
+│   ├── build_weather_analysis.py
+│   ├── build_position_dataset.py
+│   ├── build_position_comparison_analysis.py
+│   ├── build_undercut_dataset.py
+│   ├── build_overcut_dataset.py
+│   ├── test_undercut_model.py
+│   └── test_overcut_model.py
 │
 ├── data/
-│   ├── f1_pit_window_labels.csv        # 47K lap-level observations (pit window model)
-│   ├── f1_undercut_dataset.csv         # 966 labeled undercut attempts (2022-2024)
-│   └── f1_overcut_dataset.csv          # 932 labeled overcut attempts (2022-2024)
+│   ├── f1_degradation_dataset.csv
+│   ├── f1_weather_dataset.csv
+│   ├── f1_weather_coefficients.csv
+│   ├── f1_position_dataset.csv
+│   ├── f1_position_curve.csv
+│   ├── f1_position_comparison_curve.csv
+│   ├── f1_pit_window_labels.csv
+│   ├── f1_undercut_dataset.csv
+│   └── f1_overcut_dataset.csv
 │
 ├── models/
-│   ├── f1_pit_window_model.pkl         # Trained pit window GBM
-│   ├── f1_pit_window_model_tuned.pkl   # Hyperparameter-tuned pit window GBM
-│   ├── f1_undercut_model.pkl           # Trained undercut XGBoost classifier
-│   └── f1_overcut_model.pkl            # Trained overcut XGBoost classifier
+│   ├── f1_degradation_analysis.pkl
+│   ├── f1_weather_analysis.pkl
+│   ├── f1_position_model.pkl
+│   ├── f1_position_comparison_analysis.pkl
+│   ├── f1_pit_window_model.pkl
+│   ├── f1_pit_window_model_tuned.pkl
+│   ├── f1_undercut_model.pkl
+│   └── f1_overcut_model.pkl
 │
 ├── outputs/
-│   └── figures/                        # All generated plots
+│   └── figures/
 │
-└── f1-cache/                           # FastF1 local cache (gitignored for 2022-2024)
+├── docs/
+├── requirements.txt
+└── f1-cache/
 ```
 
----
+## Key Artifacts
 
-## Model Results (2024 holdout)
+### Weather / Temperature
 
-### Undercut (966 attempts, 44.1% success rate)
+- Dataset: `data/f1_weather_dataset.csv`
+- Coefficient table: `data/f1_weather_coefficients.csv`
+- Artifact: `models/f1_weather_analysis.pkl`
+- Figure: `outputs/figures/weather_laptime_scatter.png`
 
-| Model | Accuracy | ROC-AUC |
-|---|---|---|
-| Logistic Regression (baseline) | 77.1% | 0.825 |
-| XGBoost (primary) | 73.8% | 0.806 |
+### Position Prediction
 
-**Key predictors (SHAP):** gap to car ahead, pace delta, tire age advantage, degradation rate, closing rate.
+There are now two position-related outputs:
 
-### Overcut (932 attempts, 25.1% success rate)
-
-| Model | Accuracy | ROC-AUC |
-|---|---|---|
-| Logistic Regression (baseline) | 82.3% | 0.807 |
-| XGBoost (primary) | 80.5% | 0.804 |
-
-**Key predictors:** pace delta (strongest), gap ahead, tire age delta, stay-out lap count, degradation rates.
-
----
+- Full model pipeline:
+  - `data/f1_position_dataset.csv`
+  - `data/f1_position_curve.csv`
+  - `models/f1_position_model.pkl`
+  - `outputs/figures/position_curve.png`
+- Simplified 2024 vs 2025 comparison used in report `5.5`:
+  - `data/f1_position_comparison_curve.csv`
+  - `models/f1_position_comparison_analysis.pkl`
+  - `outputs/figures/position_comparison_curve.png`
 
 ## Usage
 
-**Test the undercut model interactively:**
+### Rebuild degradation artifacts
 
 ```bash
-# Browse all 2024 holdout predictions sorted by model confidence
-python scripts/test_undercut_model.py inspect
-
-# Examine false positives and false negatives
-python scripts/test_undercut_model.py errors
-
-# Filter by driver
-python scripts/test_undercut_model.py driver VER
-
-# Predict success probability for a custom scenario
-python scripts/test_undercut_model.py scenario
+python scripts/build_degradation_dataset.py
 ```
 
-**Test the overcut model interactively:**
+### Rebuild weather artifacts
 
 ```bash
-python scripts/test_overcut_model.py inspect
-python scripts/test_overcut_model.py errors
-python scripts/test_overcut_model.py driver SAI
-python scripts/test_overcut_model.py scenario
+python scripts/build_weather_analysis.py
 ```
 
-**Rebuild datasets and retrain from scratch:**
+### Rebuild full position-model artifacts
+
+```bash
+python scripts/build_position_dataset.py
+```
+
+### Rebuild the simplified report-facing position comparison
+
+```bash
+python scripts/build_position_comparison_analysis.py
+```
+
+### Rebuild strategy datasets and models
 
 ```bash
 python scripts/build_undercut_dataset.py
 python scripts/build_overcut_dataset.py
 ```
 
-**Requirements:** Python 3.12, FastF1 3.8.x, pandas 2.2.x, scikit-learn, xgboost, shap
+### Inspect trained strategy models interactively
+
+```bash
+python scripts/test_undercut_model.py inspect
+python scripts/test_undercut_model.py driver VER
+python scripts/test_overcut_model.py inspect
+python scripts/test_overcut_model.py driver SAI
+```
+
+## Notes
+
+- Python 3.12 is expected.
+- FastF1 caching is enabled in the build scripts.
+- The pit-window pipeline currently remains notebook-driven rather than script-driven.
+- The worktree may contain additional generated artifacts not listed above; the table reflects the intended core pipeline outputs.
