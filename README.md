@@ -7,10 +7,10 @@ Machine learning and statistical analysis of Formula One race strategy using the
 
 ## Scope
 
-This branch is organized around the final milestone notebook:
+This branch is organized around the final report notebook:
 
 - canonical deliverable: [notebooks/01_milestone_report.ipynb](/Users/cooperkerr/F1-Predictive-Analysis-Project/notebooks/01_milestone_report.ipynb)
-- report philosophy: keep the milestone notebook light
+- report philosophy: keep the final report notebook light
 - heavy data pulls, feature engineering, and figure generation should live in `scripts/` or in the companion analysis notebooks that already own a section
 
 The repo answers five research questions plus one integrated race-day example:
@@ -22,7 +22,7 @@ The repo answers five research questions plus one integrated race-day example:
 5. Race position predictability
 6. Integrated Hungary race-day strategy example
 
-## Final Milestone Map
+## Final Report Map
 
 This is the important ownership model for the current branch.
 
@@ -33,7 +33,7 @@ This is the important ownership model for the current branch.
 | `5.3` | Pit-window forecasting | `notebooks/02_pit_window_forecasting.ipynb` | `data/f1_pit_window_labels.csv`, `models/f1_pit_window_model_tuned.pkl` |
 | `5.4` | Undercut / overcut | `scripts/build_undercut_dataset.py`, `scripts/build_overcut_dataset.py`, plus notebooks `03` and `04` for analysis | `data/f1_undercut_dataset.csv`, `data/f1_overcut_dataset.csv`, `models/f1_undercut_model.pkl`, `models/f1_overcut_model.pkl` |
 | `5.5` | Race predictability | `scripts/build_position_comparison_analysis.py` | `data/f1_position_comparison_curve.csv`, `models/f1_position_comparison_analysis.pkl`, `position_comparison_curve.png` |
-| `5.6` | Integrated dashboard | inline milestone notebook logic using `5.3` and `5.4` artifacts | pit-window, undercut, overcut artifacts and `integrated_race_dashboard.png` |
+| `5.6` | Integrated dashboard | inline final report logic using `5.3` and `5.4` artifacts | pit-window, undercut, overcut artifacts and `integrated_race_dashboard.png` |
 
 ## Research Questions
 
@@ -204,7 +204,7 @@ Interactive inspection harnesses for the trained strategy models. These are deve
 
 - `outputs/figures/integrated_race_dashboard.png`
 
-This figure is generated from the milestone notebook using the pit-window, undercut, and overcut artifacts.
+This figure is generated from the final report notebook using the pit-window, undercut, and overcut artifacts.
 
 ## Environment
 
@@ -279,7 +279,7 @@ If you need to rebuild the branch from artifacts:
 - The older full position-model pipeline has been removed from this branch.
 - The integrated dashboard in `5.6` no longer uses an older position-bucket model; it now uses only the pit-window, undercut, and overcut pipelines.
 - `05` and `06` are still present as companion notebooks, but they are not the source of truth for saved report artifacts.
-- `CLAUDE.md` may contain local workflow notes that are not part of the milestone deliverable.
+- `CLAUDE.md` may contain local workflow notes that are not part of the final deliverable.
 
 ## Remaining Technical Debt
 
