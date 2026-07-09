@@ -143,9 +143,12 @@ Builds the lightweight weather section used in report `5.2`:
 Builds the simplified race-position comparison used in report `5.5`:
 
 - seasons compared: `2024` vs `2025`
-- race subset: Bahrain, Saudi Arabia, Australia, Japan, Miami
+- race subset: full shared notebook `05` race list
 - checkpoints: `5, 10, 20, 30, 40, 50`
-- features: current position, tyre compound, tyre life
+- features: tyre life, stint, pit stops so far, gap to leader, 3-lap pace delta, and tyre compound
+- evaluation: leave-one-race-out `GroupKFold` by Grand Prix
+- leakage control: current `Position` is excluded from the headline model
+- current corrected lap-50 accuracy: `66.5%` for 2024 and `63.3%` for 2025
 
 ### [build_undercut_dataset.py](/Users/cooperkerr/F1-Predictive-Analysis-Project/scripts/build_undercut_dataset.py)
 
