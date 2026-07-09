@@ -114,7 +114,7 @@ Companion notebook for the lighter race-predictability framing now used in repor
 
 ### [06_temperature_effect_modeling.ipynb](/Users/cooperkerr/F1-Predictive-Analysis-Project/notebooks/06_temperature_effect_modeling.ipynb)
 
-Companion notebook for the lighter weather framing now used in report `5.2`. It is a source notebook, not the canonical report pipeline.
+Source notebook for the canonical weather interaction model used in report `5.2`; the script now mirrors this notebook's race/year scope, filters, and formula for artifact generation.
 
 ## Script Roles
 
@@ -130,13 +130,15 @@ Builds the degradation analysis artifacts consumed by report `5.1`:
 
 ### [build_weather_analysis.py](/Users/cooperkerr/F1-Predictive-Analysis-Project/scripts/build_weather_analysis.py)
 
-Builds the lightweight weather section used in report `5.2`:
+Builds the canonical weather section used in report `5.2`:
 
-- fixed race subset
+- six-race, 2021-2025 notebook `06` sample
 - lap / weather merge by timestamp
-- baseline OLS with HC2 robust standard errors
+- pit-lap and undefined-compound filtering
+- compound-specific track-temperature interaction OLS with HC2 robust standard errors
 - compact coefficient table
 - single scatter plot used by the report
+- current fit: R² = 0.380 on 27,998 filtered laps
 
 ### [build_position_comparison_analysis.py](/Users/cooperkerr/F1-Predictive-Analysis-Project/scripts/build_position_comparison_analysis.py)
 

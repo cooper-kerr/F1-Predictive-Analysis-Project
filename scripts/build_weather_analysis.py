@@ -1,15 +1,17 @@
 """
 F1 Weather / Temperature Analysis
 =================================
-Lightweight script version of notebook 06.
+Script-backed version of notebook 06.
 
-Research question: how do weather and temperature variables relate to raw
-race lap time across a small, comparable race subset?
+Research question: how do weather and temperature variables relate to race
+lap time after controlling for compound, tire life, race progression, race,
+and year?
 
 Approach:
-  - Load 2024 and 2025 race sessions for a fixed set of Grands Prix
+  - Load the notebook 06 race/year scope: six races across 2021-2025
   - Merge lap-level timing with session weather observations by timestamp
-  - Fit one baseline OLS regression with HC2 robust standard errors
+  - Remove pit-in/pit-out laps and undefined compounds
+  - Fit the notebook 06 interaction OLS formula with HC2 robust standard errors
   - Save a compact coefficient table, artifact dict, and a scatter plot
 
 Outputs:
@@ -41,8 +43,8 @@ FIGURES_DIR = ROOT / 'outputs' / 'figures'
 
 fastf1.Cache.enable_cache(str(CACHE_DIR))
 
-RACES = ['Bahrain', 'Saudi Arabia', 'Australia', 'Japan', 'China']
-YEARS = [2024, 2025]
+RACES = ['United States', 'Bahrain', 'Saudi Arabia', 'Australia', 'Japan', 'China']
+YEARS = [2021, 2022, 2023, 2024, 2025]
 
 DATASET_PATH = DATA_DIR / 'f1_weather_dataset.csv'
 COEF_PATH    = DATA_DIR / 'f1_weather_coefficients.csv'
@@ -79,9 +81,14 @@ def build_full_dataset() -> pd.DataFrame:
                 merged = pd.merge_asof(laps, weather, on='Time', direction='backward')
                 merged['LapTime_Seconds'] = merged['LapTime'].dt.total_seconds()
                 merged = merged.dropna(subset=[
-                    'LapTime_Seconds', 'TrackTemp', 'AirTemp', 'Pressure',
-                    'Humidity', 'WindSpeed', 'WindDirection', 'Compound'
+                    'LapTime_Seconds', 'TrackTemp', 'WindSpeed', 'Rainfall',
+                    'TyreLife', 'LapNumber', 'Compound'
                 ]).copy()
+                merged = merged[
+                    merged['PitInTime'].isna() &
+                    merged['PitOutTime'].isna() &
+                    (merged['Compound'] != 'None')
+                ].copy()
 
                 frames.append(merged)
                 print(f'{year} {race:20s}  {len(merged):4d} rows')
@@ -96,15 +103,14 @@ def build_full_dataset() -> pd.DataFrame:
 def fit_weather_model(df: pd.DataFrame):
     model = smf.ols(
         formula='''LapTime_Seconds ~
-                    + C(Year)
-                    + C(Race)
-                    + C(Compound) - 1
-                    + TrackTemp
-                    + AirTemp
-                    + Pressure
-                    + Humidity
+                    + C(Compound)
+                    + TrackTemp: C(Compound) - 1
+                    + TyreLife
                     + WindSpeed
-                    + WindDirection''',
+                    + Rainfall
+                    + LapNumber
+                    + C(Year)
+                    + C(Race)''',
         data=df,
     ).fit(cov_type='HC2')
     return model
@@ -129,7 +135,7 @@ def plot_scatter(df: pd.DataFrame, out_path: Path) -> None:
         ax.scatter(group['TrackTemp'], group['LapTime_Seconds'],
                    label=race, alpha=0.45, s=14)
 
-    ax.set_title('2024 Races by Track Temperature and Lap Time',
+    ax.set_title('2024 Canonical Weather Sample by Track Temperature and Lap Time',
                  fontsize=12, fontweight='bold')
     ax.set_xlabel('Track Temperature')
     ax.set_ylabel('Lap Time (seconds)')
