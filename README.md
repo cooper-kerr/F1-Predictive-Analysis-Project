@@ -184,6 +184,7 @@ Interactive inspection harnesses for the trained strategy models. These are deve
 - `data/f1_pit_window_labels.csv`
 - `models/f1_pit_window_model_tuned.pkl`
 - supporting figures under `outputs/figures/pit_window_*`
+- Current 2024 holdout: MAE 2.21 laps, RMSE 3.41 laps, 58.5% within ±2 laps, 85.2% within ±5 laps.
 
 ### Undercut
 
