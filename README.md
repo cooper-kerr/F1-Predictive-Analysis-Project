@@ -2,8 +2,12 @@
 
 Machine learning and statistical analysis of Formula One race strategy using the [FastF1](https://docs.fastf1.dev/) API.
 
-**Authors:** Cooper Kerr, Isaac Middlemas, Minh Le  
+**Maintained by Cooper Kerr.** Minh Le contributed probability modeling work incorporated into this project as part of a University of Utah class project.  
 **Institution:** University of Utah
+
+## Contributions
+
+Cooper Kerr built and maintains the repository structure, data engineering workflow, reproducible build scripts, notebook orchestration, pit-window forecasting pipeline, undercut and overcut strategy pipelines, tire-degradation analysis, and leakage fixes. Minh Le contributed probability modeling work used in the race-position predictability section.
 
 ## Scope
 
