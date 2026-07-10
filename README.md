@@ -64,6 +64,7 @@ F1-Predictive-Analysis-Project/
 │   ├── build_degradation_dataset.py
 │   ├── build_weather_analysis.py
 │   ├── build_position_comparison_analysis.py
+│   ├── f1_strategy_common.py
 │   ├── build_undercut_dataset.py
 │   ├── build_overcut_dataset.py
 │   ├── test_undercut_model.py
@@ -163,6 +164,10 @@ Builds the undercut dataset and trains the undercut model artifact used in repor
 ### [build_overcut_dataset.py](/Users/cooperkerr/F1-Predictive-Analysis-Project/scripts/build_overcut_dataset.py)
 
 Builds the overcut dataset and trains the overcut model artifact used in report `5.4` and `5.6`.
+
+### [f1_strategy_common.py](/Users/cooperkerr/F1-Predictive-Analysis-Project/scripts/f1_strategy_common.py)
+
+Shared helper functions for strategy dataset generation, including gap time series construction, pit-loss calculation, short-window pace estimates, degradation deltas, and Safety Car / VSC interval checks.
 
 ### [test_undercut_model.py](/Users/cooperkerr/F1-Predictive-Analysis-Project/scripts/test_undercut_model.py) and [test_overcut_model.py](/Users/cooperkerr/F1-Predictive-Analysis-Project/scripts/test_overcut_model.py)
 
@@ -294,5 +299,4 @@ If you need to rebuild the branch from artifacts:
 ## Remaining Technical Debt
 
 - The pit-window pipeline is still notebook-driven while the other report-facing sections are mostly script-backed.
-- `build_undercut_dataset.py` and `build_overcut_dataset.py` share substantial helper logic and could be refactored into a common utility module.
 - Companion notebooks `05` and `06` still duplicate some executable logic from their corresponding scripts.
