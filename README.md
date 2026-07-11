@@ -5,9 +5,64 @@ Machine learning and statistical analysis of Formula One race strategy using the
 **Maintained by Cooper Kerr.** Minh Le contributed probability modeling work incorporated into this project as part of a University of Utah class project.  
 **Institution:** University of Utah
 
+## Recruiter Quick Read
+
+This project turns public Formula One timing data into an explainable race-strategy demo. The Streamlit app lets a reviewer pick a 2024 race, driver, and lap, then see:
+
+- when the model thinks the driver's pit window is opening
+- whether an undercut or overcut looks more favorable against the direct rival ahead
+- how tire degradation and weather context help explain the strategy recommendation
+
+The strongest engineering signal is the full pipeline around the demo: FastF1 data collection, feature engineering, leakage-aware modeling, saved model artifacts, reproducible build scripts, notebook-backed analysis, and a deployed-demo-friendly Streamlit interface that reads bundled static lap data instead of depending on live API calls.
+
+## Dashboard Value Proposition
+
+The dashboard is designed as a recruiter-facing slice of the larger analysis, not as a replacement for a real F1 strategy tool. It connects three model outputs into one race-state view:
+
+1. **Pit-window forecast:** estimates how many laps remain before a stop becomes strategically viable.
+2. **Undercut / overcut probabilities:** compares two common rival-focused strategy options using trained classifiers.
+3. **Context panels:** shows degradation and weather analysis so the prediction is easier to interpret.
+
+For a hiring manager, the app demonstrates practical machine-learning product work: translating a noisy sports dataset into features, training and evaluating models, packaging artifacts, and presenting model output in a way a non-specialist can inspect quickly.
+
+## Run The App
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Open the local Streamlit URL printed in the terminal. The app uses `data/f1_2024_static_laps.csv.gz` at runtime, so the demo can load without making live FastF1 requests.
+
+If the static runtime lap file needs to be regenerated from a populated local FastF1 cache:
+
+```bash
+python scripts/build_static_laps_cache.py
+```
+
 ## Contributions
 
 Cooper Kerr built and maintains the repository structure, data engineering workflow, reproducible build scripts, notebook orchestration, pit-window forecasting pipeline, undercut and overcut strategy pipelines, tire-degradation analysis, and leakage fixes. Minh Le contributed probability modeling work used in the race-position predictability section.
+
+## Technical Highlights
+
+- **Data pipeline:** uses FastF1 timing data, cached local artifacts, and section-specific datasets under `data/`.
+- **Model packaging:** stores trained models and analysis summaries under `models/` with `joblib`, allowing the report and app to load the same artifacts.
+- **Evaluation discipline:** uses holdout seasons or leave-one-race-out validation where appropriate, and explicitly documents leakage fixes in the race-position analysis.
+- **Demo architecture:** keeps Streamlit runtime lightweight by loading prebuilt model/data artifacts instead of rebuilding datasets on page load.
+- **Explainability:** includes feature-importance, SHAP, calibration, and context plots for strategy sections where they are useful.
+
+## Model And Evaluation Highlights
+
+| Area | Current Result |
+|---|---|
+| Weather / temperature | Compound-specific OLS interaction model with R² = 0.380 on 27,998 filtered laps |
+| Pit-window forecasting | 2024 holdout MAE 2.21 laps, RMSE 3.41 laps, 58.5% within ±2 laps, 85.2% within ±5 laps |
+| Undercut model | Strategy classification with ROC-AUC around 0.80; Logistic Regression reaches 0.771 accuracy / 0.825 ROC-AUC, while XGBoost favors stronger success-case recall |
+| Overcut model | Strategy classification with roughly 0.81 accuracy and 0.80 ROC-AUC in the report summary |
+| Race predictability | Leave-one-race-out comparison with corrected lap-50 accuracy of 66.5% for 2024 and 63.3% for 2025 |
 
 ## Scope
 
@@ -306,7 +361,21 @@ If you need to rebuild the branch from artifacts:
 - `05` and `06` are still present as companion notebooks, but they are not the source of truth for saved report artifacts.
 - `CLAUDE.md` may contain local workflow notes that are not part of the final deliverable.
 
+## Project Limitations
+
+- The models use public timing data only; they do not include team radio, tire inventory constraints, pit-crew execution details, or proprietary simulator estimates.
+- Safety Car, VSC, red-flag, and weather-shift effects can still create race outcomes that are hard to predict from pre-event lap-state features.
+- Driver and team effects are simplified, so the strategy models should be treated as decision-support signals rather than tactical guarantees.
+- The dashboard is a demo over saved 2024 lap data; it is intentionally optimized for reliability and reviewability rather than live race operation.
+
 ## Remaining Technical Debt
 
 - The pit-window pipeline is still notebook-driven while the other report-facing sections are mostly script-backed.
 - Companion notebooks `05` and `06` still duplicate some executable logic from their corresponding scripts.
+
+## Suggested Next Steps
+
+- Move the pit-window training workflow from notebook-only execution into a script-backed artifact builder.
+- Add a compact dashboard demo note or hosted screenshot for reviewers who do not want to run the app locally.
+- Add driver/team features and richer traffic context to the strategy models.
+- Add a small smoke test that verifies all required Streamlit artifacts exist before deployment.
