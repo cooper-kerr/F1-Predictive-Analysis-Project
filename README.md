@@ -133,6 +133,8 @@ Builds the degradation analysis artifacts consumed by report `5.1`:
 - stint-length vs degradation correlation
 - three report figures
 
+The degradation finding is compound-dependent: pace typically improves after a brief warm-up and then flattens, with HARD and MEDIUM showing little to no late-stint median uptick and SOFT showing only a possible late uptick in sparsely supported tail bins.
+
 ### [build_weather_analysis.py](/Users/cooperkerr/F1-Predictive-Analysis-Project/scripts/build_weather_analysis.py)
 
 Builds the canonical weather section used in report `5.2`:
