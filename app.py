@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
-import fastf1
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,7 +12,7 @@ import streamlit as st
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
 MODEL_DIR = ROOT / "models"
-CACHE_DIR = ROOT / "f1-cache"
+STATIC_LAPS_PATH = DATA_DIR / "f1_2024_static_laps.csv.gz"
 
 sys.path.append(str(ROOT / "scripts"))
 from f1_strategy_common import (  # noqa: E402
@@ -23,14 +23,16 @@ from f1_strategy_common import (  # noqa: E402
 )
 
 
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
-fastf1.Cache.enable_cache(str(CACHE_DIR))
-
-
 @st.cache_data
 def load_pit_labels():
     df = pd.read_csv(DATA_DIR / "f1_pit_window_labels.csv")
     return df[df["year"] == 2024].copy()
+
+
+@st.cache_data
+def pit_feature_medians():
+    df = pd.read_csv(DATA_DIR / "f1_pit_window_labels.csv")
+    return df.median(numeric_only=True).to_dict()
 
 
 @st.cache_resource
@@ -44,11 +46,22 @@ def load_artifacts():
     }
 
 
-@st.cache_resource(show_spinner="Loading cached FastF1 race data...")
+@st.cache_data(show_spinner="Loading bundled 2024 lap data...")
+def load_static_laps():
+    laps = pd.read_csv(STATIC_LAPS_PATH)
+    for col in ["LapTime", "LapStartTime", "PitInTime", "PitOutTime"]:
+        laps[col] = pd.to_timedelta(laps[col], unit="s")
+    laps["TrackStatus"] = laps["TrackStatus"].astype(str)
+    return laps
+
+
+@st.cache_resource(show_spinner="Loading bundled race data...")
 def load_session(race_name):
-    session = fastf1.get_session(2024, race_name, "R")
-    session.load(laps=True, telemetry=False, weather=False, messages=False)
-    return session
+    laps = load_static_laps()
+    race_laps = laps[laps["Race"] == race_name].drop(columns=["Race"]).copy()
+    if race_laps.empty:
+        raise ValueError(f"No bundled 2024 lap data found for {race_name}.")
+    return SimpleNamespace(laps=race_laps)
 
 
 @st.cache_data
@@ -122,17 +135,20 @@ def age_bin_for_tire_age(tire_age, age_labels):
     return "30+" if "30+" in age_labels else None
 
 
-def encode_pit_row(row, pit_artifact):
+def encode_pit_row(row, pit_artifact, medians):
     model = pit_artifact["model"]
     encoders = pit_artifact["encoders"]
     features = list(model.feature_names_in_)
     values = {}
     issues = []
+    filled = []
 
     for feature in features:
         if feature not in row.index:
-            values[feature] = np.nan
             issues.append(f"`{feature}` missing from pit label row")
+            values[feature] = medians.get(feature, np.nan)
+            if pd.notna(values[feature]):
+                filled.append(feature)
             continue
 
         value = row[feature]
@@ -147,9 +163,14 @@ def encode_pit_row(row, pit_artifact):
                     value = encoder.classes_[0]
             values[feature] = int(encoder.transform([value])[0])
         else:
-            values[feature] = float(value) if pd.notna(value) else np.nan
+            if pd.notna(value):
+                values[feature] = float(value)
+            else:
+                values[feature] = medians.get(feature, np.nan)
+                if pd.notna(values[feature]):
+                    filled.append(feature)
 
-    return pd.DataFrame([values], columns=features), issues
+    return pd.DataFrame([values], columns=features), issues, filled
 
 
 def nearest_pit_label_row(pit_df, race, driver, lap):
@@ -485,6 +506,7 @@ def main():
     )
 
     pit_df = load_pit_labels()
+    pit_medians = pit_feature_medians()
     artifacts = load_artifacts()
 
     races = sorted(pit_df["circuit"].dropna().unique())
@@ -512,20 +534,28 @@ def main():
     else:
         if pit_note:
             st.info(pit_note)
-        pit_x, pit_issues = encode_pit_row(pit_row, artifacts["pit"])
-        if pit_x.isna().any(axis=None):
-            st.warning("Some pit-window features are missing; prediction is not shown.")
-            st.dataframe(pit_x, width="stretch")
-        else:
-            pred = float(artifacts["pit"]["model"].predict(pit_x)[0])
-            st.metric("Predicted laps until pit window opens", f"{pred:.1f}")
+        pit_x, pit_issues, pit_filled = encode_pit_row(
+            pit_row, artifacts["pit"], pit_medians
+        )
+        remaining_missing = pit_x.columns[pit_x.isna().iloc[0]].tolist()
+        if remaining_missing:
+            pit_x = pit_x.fillna(0.0)
+            pit_filled.extend(remaining_missing)
+        pred = float(artifacts["pit"]["model"].predict(pit_x)[0])
+        st.metric("Predicted laps until pit window opens", f"{pred:.1f}")
+        st.caption(
+            f"Saved label row: lap {int(pit_row['lap'])}, context `{pit_row['context']}`, "
+            f"compound `{pit_row['compound']}`."
+        )
+        with st.expander("Pit-window feature vector"):
+            display = pit_row[list(artifacts["pit"]["model"].feature_names_in_)].to_frame("value")
+            st.dataframe(display, width="stretch")
+        if pit_filled:
             st.caption(
-                f"Saved label row: lap {int(pit_row['lap'])}, context `{pit_row['context']}`, "
-                f"compound `{pit_row['compound']}`."
+                "Missing pit-window feature values filled before prediction: "
+                + ", ".join(f"`{feature}`" for feature in dict.fromkeys(pit_filled))
+                + "."
             )
-            with st.expander("Pit-window feature vector"):
-                display = pit_row[list(artifacts["pit"]["model"].feature_names_in_)].to_frame("value")
-                st.dataframe(display, width="stretch")
         for issue in pit_issues:
             st.warning(issue)
 

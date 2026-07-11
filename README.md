@@ -75,6 +75,7 @@ F1-Predictive-Analysis-Project/
 │   ├── f1_weather_coefficients.csv
 │   ├── f1_position_comparison_curve.csv
 │   ├── f1_pit_window_labels.csv
+│   ├── f1_2024_static_laps.csv.gz
 │   ├── f1_undercut_dataset.csv
 │   └── f1_overcut_dataset.csv
 ├── models/
@@ -228,6 +229,13 @@ This figure is generated from the final report notebook using the pit-window, un
 - Python `3.12` expected
 - dependencies listed in [requirements.txt](/Users/cooperkerr/F1-Predictive-Analysis-Project/requirements.txt)
 - FastF1 local cache directory: `f1-cache/`
+- Streamlit app runtime lap data: `data/f1_2024_static_laps.csv.gz`
+
+The Streamlit app uses the bundled 2024 lap data file instead of making live FastF1 calls at page load. This keeps deployed demos independent of F1 live-timing endpoint availability and hosting-provider IP blocks. Regenerate it from a populated local FastF1 cache with:
+
+```bash
+python scripts/build_static_laps_cache.py
+```
 
 Basic setup:
 
