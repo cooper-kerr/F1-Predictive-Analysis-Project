@@ -41,93 +41,278 @@ def apply_theme():
     st.markdown(
         """
         <style>
+        @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
+
+        :root {
+            --carbon: #0B0F14;
+            --asphalt: #151B23;
+            --panel: #1B232D;
+            --panel-2: #202A35;
+            --line: rgba(207, 216, 220, 0.16);
+            --line-strong: rgba(242, 201, 76, 0.38);
+            --text: #EEF3F7;
+            --muted: #AAB7C4;
+            --dim: #7C8A96;
+            --amber: #F2C94C;
+            --red: #FF3B30;
+            --green: #28D17C;
+            --blue: #64B5F6;
+            --soft: #F45B69;
+            --medium: #F2C94C;
+            --hard: #D9E2EC;
+        }
+
+        .stApp {
+            background:
+                linear-gradient(90deg, rgba(242, 201, 76, 0.03) 1px, transparent 1px) 0 0 / 56px 56px,
+                radial-gradient(circle at 82% 8%, rgba(100, 181, 246, 0.14), transparent 26rem),
+                linear-gradient(135deg, #070A0D 0%, var(--carbon) 42%, #101820 100%);
+            color: var(--text);
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
         .main .block-container {
-            max-width: 1180px;
-            padding-top: 1.4rem;
+            max-width: 1240px;
+            padding-top: 1.15rem;
             padding-bottom: 4rem;
         }
-        h1, h2, h3 {
+        h1, h2, h3, h4 {
             letter-spacing: 0;
+            color: var(--text);
+            font-family: "Barlow Condensed", "Arial Narrow", "Inter", sans-serif;
+            text-transform: uppercase;
+        }
+        p, li, label, span, div {
+            color: inherit;
+        }
+        div[data-testid="stMarkdownContainer"] p {
+            color: var(--muted);
         }
         [data-testid="stSidebar"] {
-            border-right: 1px solid rgba(148, 163, 184, 0.18);
+            background:
+                linear-gradient(180deg, rgba(242, 201, 76, 0.09), transparent 18rem),
+                #0A0E13;
+            border-right: 1px solid var(--line);
+        }
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span {
+            color: var(--text);
+        }
+        [data-baseweb="select"] > div,
+        [data-testid="stSlider"] [data-baseweb="slider"] {
+            color: var(--text);
+        }
+        [data-testid="stSelectbox"] div[role="button"],
+        [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.16);
+            border-radius: 7px;
+        }
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.35rem;
+            border-bottom: 1px solid var(--line);
+        }
+        .stTabs [data-baseweb="tab"] {
+            height: 2.7rem;
+            border-radius: 7px 7px 0 0;
+            color: var(--muted);
+            font-weight: 800;
+            letter-spacing: 0.02em;
+        }
+        .stTabs [aria-selected="true"] {
+            background: rgba(242, 201, 76, 0.12);
+            color: var(--amber) !important;
+            border-bottom: 2px solid var(--amber);
         }
         [data-testid="stMetric"] {
-            background: rgba(148, 163, 184, 0.08);
-            border: 1px solid rgba(148, 163, 184, 0.16);
+            background:
+                linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025)),
+                var(--panel);
+            border: 1px solid var(--line);
             border-radius: 8px;
-            padding: 0.9rem 1rem;
+            padding: 0.95rem 1rem;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
         }
         [data-testid="stMetricLabel"] {
-            color: rgba(71, 85, 105, 0.98);
+            color: var(--muted);
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        [data-testid="stMetricValue"] {
+            color: var(--text);
+            font-family: "Barlow Condensed", "Arial Narrow", "Inter", sans-serif;
+            font-size: 2.1rem;
+            letter-spacing: 0;
+        }
+        [data-testid="stMetricDelta"] {
+            color: var(--amber);
         }
         .race-hero {
-            border: 1px solid rgba(148, 163, 184, 0.2);
+            position: relative;
+            overflow: hidden;
+            border: 1px solid var(--line-strong);
             border-radius: 8px;
-            padding: 1.15rem 1.25rem 1.05rem;
-            margin-bottom: 1rem;
+            padding: 1.25rem 1.35rem 1.15rem;
+            margin-bottom: 0.85rem;
             background:
-                linear-gradient(135deg, rgba(220, 38, 38, 0.12), rgba(15, 23, 42, 0.04) 38%, rgba(16, 185, 129, 0.08)),
-                rgba(248, 250, 252, 0.92);
+                linear-gradient(90deg, rgba(255, 59, 48, 0.18), transparent 34%),
+                repeating-linear-gradient(90deg, rgba(242, 201, 76, 0.12) 0 2px, transparent 2px 18px),
+                #111820;
+            box-shadow: 0 18px 60px rgba(0,0,0,0.28);
+        }
+        .race-hero::after {
+            content: "";
+            position: absolute;
+            inset: auto 1.25rem 1rem auto;
+            width: min(42vw, 360px);
+            height: 4px;
+            background: linear-gradient(90deg, var(--green), var(--amber), var(--red));
+            border-radius: 99px;
+            opacity: 0.9;
         }
         .race-hero h1 {
             margin: 0;
-            font-size: clamp(2rem, 5vw, 3.1rem);
-            line-height: 1.02;
+            max-width: 920px;
+            font-size: clamp(2.45rem, 6vw, 5.2rem);
+            line-height: 0.86;
+            color: var(--text);
         }
         .race-hero p {
-            max-width: 780px;
-            margin: 0.65rem 0 0;
-            color: rgba(51, 65, 85, 0.98);
+            max-width: 840px;
+            margin: 0.75rem 0 0;
+            color: var(--muted);
             font-size: 1.02rem;
+        }
+        .hero-kicker {
+            color: var(--amber);
+            font-size: 0.82rem;
+            font-weight: 900;
+            letter-spacing: 0.18em;
+            margin-bottom: 0.45rem;
+            text-transform: uppercase;
         }
         .scenario-strip {
             display: flex;
-            gap: 0.55rem;
+            gap: 0.5rem;
             flex-wrap: wrap;
-            margin: 0.7rem 0 1rem;
+            margin: 0.65rem 0 1.05rem;
         }
         .scenario-pill {
-            border: 1px solid rgba(148, 163, 184, 0.26);
-            border-radius: 999px;
-            padding: 0.35rem 0.7rem;
-            background: rgba(255, 255, 255, 0.72);
-            color: rgba(30, 41, 59, 0.98);
+            border: 1px solid var(--line);
+            border-radius: 7px;
+            padding: 0.45rem 0.7rem;
+            background: rgba(255, 255, 255, 0.055);
+            color: var(--muted);
             font-size: 0.88rem;
-        }
-        div[data-testid="stTabs"] button {
             font-weight: 650;
+        }
+        .scenario-pill strong {
+            color: var(--text);
         }
         .stAlert {
             border-radius: 8px;
+            background: rgba(100, 181, 246, 0.08);
+            color: var(--text);
         }
         div[data-testid="stExpander"] {
             border-radius: 8px;
-            border-color: rgba(148, 163, 184, 0.24);
+            border-color: var(--line);
+            background: rgba(255,255,255,0.035);
         }
         .evidence-card {
-            border: 1px solid rgba(148, 163, 184, 0.24);
+            min-height: 100%;
+            border: 1px solid var(--line);
             border-radius: 8px;
             padding: 1rem 1.1rem;
             margin-bottom: 0.85rem;
-            background: rgba(248, 250, 252, 0.72);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.025)),
+                var(--panel);
         }
         .evidence-card h4 {
             margin: 0 0 0.4rem 0;
-            font-size: 1rem;
+            font-size: 1.18rem;
+            color: var(--amber);
         }
         .evidence-card p {
             margin: 0.35rem 0;
+            color: var(--muted);
         }
         .evidence-card ul {
             margin: 0.55rem 0 0 1.1rem;
             padding: 0;
+            color: var(--muted);
+        }
+        .read-card {
+            border-left: 3px solid var(--amber);
+            border-radius: 8px;
+            padding: 0.8rem 0.9rem;
+            min-height: 92px;
+            background: rgba(255, 255, 255, 0.045);
+        }
+        .read-card strong {
+            display: block;
+            color: var(--text);
+            font-size: 0.78rem;
+            letter-spacing: 0.12em;
+            margin-bottom: 0.35rem;
+            text-transform: uppercase;
+        }
+        .read-card span {
+            color: var(--muted);
+            font-size: 0.92rem;
+            line-height: 1.4;
+        }
+        .section-callout {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 1rem 1.1rem;
+            margin: 0.25rem 0 1rem;
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .section-callout h3 {
+            margin: 0 0 0.35rem;
+            color: var(--text);
+            font-size: 1.55rem;
+        }
+        .section-callout p {
+            margin: 0;
+            color: var(--muted);
+        }
+        .tyre-badge {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 0.14rem 0.48rem;
+            font-weight: 900;
+            color: #06080A;
+        }
+        .tyre-soft { background: var(--soft); }
+        .tyre-medium { background: var(--medium); }
+        .tyre-hard { background: var(--hard); }
+        .tyre-other { background: var(--blue); }
+        .dataframe,
+        [data-testid="stDataFrame"] {
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        hr {
+            border-color: var(--line);
         }
         .figure-caption {
-            color: rgba(71, 85, 105, 0.95);
+            color: var(--dim);
             font-size: 0.9rem;
             margin-top: -0.25rem;
             margin-bottom: 0.9rem;
+        }
+        button[kind="primary"], .stButton button {
+            border-radius: 7px;
+        }
+        a {
+            color: var(--blue);
         }
         </style>
         """,
@@ -185,6 +370,40 @@ def format_percent(value):
     if pd.isna(value):
         return "n/a"
     return f"{float(value):.1%}"
+
+
+def tyre_badge(compound):
+    compound_text = str(compound or "UNKNOWN").upper()
+    css_class = {
+        "SOFT": "tyre-soft",
+        "MEDIUM": "tyre-medium",
+        "HARD": "tyre-hard",
+    }.get(compound_text, "tyre-other")
+    return f'<span class="tyre-badge {css_class}">{compound_text}</span>'
+
+
+def render_read_card(title, body):
+    st.markdown(
+        f"""
+        <div class="read-card">
+            <strong>{title}</strong>
+            <span>{body}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_callout(title, body):
+    st.markdown(
+        f"""
+        <div class="section-callout">
+            <h3>{title}</h3>
+            <p>{body}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_model_card(title, summary, facts, caveat=None):
@@ -537,7 +756,7 @@ def render_degradation(compound, tire_age, artifact):
     current_bin = age_bin_for_tire_age(tire_age, labels)
     current_x = labels.index(current_bin) if current_bin in labels else None
 
-    colors = {"2022-2023": "#64748B", "2024": "#DC2626"}
+    colors = {"2022-2023": "#64B5F6", "2024": "#F2C94C"}
     fig = make_subplots(
         rows=2,
         cols=1,
@@ -573,7 +792,7 @@ def render_degradation(compound, tire_age, artifact):
                 line=dict(color=color, width=3),
                 marker=dict(
                     size=10,
-                    color=np.where(low_support, "#FFFFFF", color),
+                    color=np.where(low_support, "#151B23", color),
                     line=dict(color=color, width=np.where(low_support, 2.5, 0)),
                 ),
                 customdata=custom,
@@ -599,7 +818,7 @@ def render_degradation(compound, tire_age, artifact):
                 x=current_bin,
                 line_width=2,
                 line_dash="dot",
-                line_color="#0F172A",
+                line_color="#28D17C",
                 row="all",
                 col=1,
             )
@@ -612,8 +831,8 @@ def render_degradation(compound, tire_age, artifact):
                     marker=dict(
                         symbol="star",
                         size=18,
-                        color="#0F172A",
-                        line=dict(color="#FFFFFF", width=1.5),
+                        color="#28D17C",
+                        line=dict(color="#EEF3F7", width=1.5),
                     ),
                     hovertemplate=(
                         "<b>Selected lap</b><br>"
@@ -636,8 +855,8 @@ def render_degradation(compound, tire_age, artifact):
                 y=counts,
                 name=f"{era} stint count",
                 marker=dict(
-                    color=np.where(low_support, "#F59E0B", colors.get(era, "#94A3B8")),
-                    line=dict(color="rgba(15, 23, 42, 0.28)", width=1),
+                    color=np.where(low_support, "#FF3B30", colors.get(era, "#64B5F6")),
+                    line=dict(color="rgba(238, 243, 247, 0.22)", width=1),
                 ),
                 opacity=0.78,
                 customdata=np.stack([group["n_laps"].to_numpy()], axis=-1),
@@ -658,7 +877,7 @@ def render_degradation(compound, tire_age, artifact):
         y=15,
         line_width=1.5,
         line_dash="dash",
-        line_color="#F59E0B",
+        line_color="#FF3B30",
         annotation_text="low-support threshold",
         annotation_position="top left",
         row=2,
@@ -686,8 +905,12 @@ def render_degradation(compound, tire_age, artifact):
             x=0,
         ),
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(248,250,252,0.96)",
-        font=dict(size=13),
+        plot_bgcolor="rgba(21,27,35,0.96)",
+        font=dict(size=13, color="#EEF3F7"),
+        xaxis=dict(gridcolor="rgba(207,216,220,0.14)", zerolinecolor="rgba(207,216,220,0.18)"),
+        yaxis=dict(gridcolor="rgba(207,216,220,0.14)", zerolinecolor="rgba(207,216,220,0.18)"),
+        xaxis2=dict(gridcolor="rgba(207,216,220,0.14)", zerolinecolor="rgba(207,216,220,0.18)"),
+        yaxis2=dict(gridcolor="rgba(207,216,220,0.14)", zerolinecolor="rgba(207,216,220,0.18)"),
     )
     st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
 
@@ -781,7 +1004,7 @@ def render_position_predictability(artifact):
                 y=float(baseline),
                 line_width=1,
                 line_dash="dot",
-                line_color="rgba(71, 85, 105, 0.55)",
+                line_color="rgba(242, 201, 76, 0.45)",
                 annotation_text=f"{year} majority baseline {float(baseline):.1%}",
                 annotation_position="bottom right",
             )
@@ -794,7 +1017,10 @@ def render_position_predictability(artifact):
         xaxis_title="Race checkpoint lap",
         hovermode="x unified",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(248,250,252,0.96)",
+        plot_bgcolor="rgba(21,27,35,0.96)",
+        font=dict(color="#EEF3F7"),
+        xaxis=dict(gridcolor="rgba(207,216,220,0.14)", zerolinecolor="rgba(207,216,220,0.18)"),
+        yaxis=dict(gridcolor="rgba(207,216,220,0.14)", zerolinecolor="rgba(207,216,220,0.18)"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
@@ -1035,7 +1261,7 @@ def main():
         max_lap = int(driver_rows["lap"].max())
         lap = st.slider("Lap", min_value=min_lap, max_value=max_lap, value=min_lap)
         st.caption(
-            "Live predictions use saved 2024 race-state rows and bundled lap data."
+            "Saved 2024 race-state rows and bundled lap data power the live demo."
         )
 
     session = load_session(race)
@@ -1078,17 +1304,18 @@ def main():
     st.markdown(
         f"""
         <div class="race-hero">
+            <div class="hero-kicker">2024 race-control model wall</div>
             <h1>F1 Race Strategy Intelligence</h1>
             <p>
-                Recruiter-facing strategy dashboard for the 2024 {race}: live pit-window,
-                undercut, and overcut model outputs paired with tyre-degradation and weather context.
+                A race-strategy dashboard for the 2024 {race}: pit-window timing,
+                undercut and overcut pressure, tyre life, and weather evidence in one inspection view.
             </p>
         </div>
         <div class="scenario-strip">
             <span class="scenario-pill">Race: <strong>{race} 2024</strong></span>
             <span class="scenario-pill">Driver: <strong>{driver}</strong></span>
             <span class="scenario-pill">Lap: <strong>{lap} / {total_laps}</strong></span>
-            <span class="scenario-pill">Compound: <strong>{compound}</strong></span>
+            <span class="scenario-pill">Compound: {tyre_badge(compound)}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1107,10 +1334,13 @@ def main():
         context["rival"] if context is not None else None,
     )
 
-    s1, s2, s3 = st.columns([1.2, 1, 1])
-    s1.caption(pit_window_read(pit_pred))
-    s2.caption(strategy_read(undercut_prob, overcut_prob))
-    s3.caption(degradation_read(tire_age))
+    s1, s2, s3 = st.columns([1.15, 1, 1])
+    with s1:
+        render_read_card("Pit wall read", pit_window_read(pit_pred))
+    with s2:
+        render_read_card("Attack choice", strategy_read(undercut_prob, overcut_prob))
+    with s3:
+        render_read_card("Tyre phase", degradation_read(tire_age))
 
     overview, pit_tab, strategy_tab, degradation_tab, weather_tab, evidence_tab = st.tabs(
         [
@@ -1124,7 +1354,10 @@ def main():
     )
 
     with overview:
-        st.subheader("Race-State Snapshot")
+        render_section_callout(
+            "Race-State Snapshot",
+            "The overview pairs the live strategy outputs with the report artifacts behind the model: pit-window forecasting, rival attack probabilities, tyre degradation, weather effects, and race-position predictability.",
+        )
         o1, o2, o3, o4 = st.columns(4)
         o1.metric("Analysed 2024 Races", f"{len(races)}")
         o2.metric("Bundled Lap Rows", f"{len(laps):,}")
@@ -1137,22 +1370,15 @@ def main():
             "Degradation Stints",
             f"{len(artifacts['degradation']['stint_summaries']):,}",
         )
-        st.write(
-            "This first screen combines the live strategy outputs with the supporting "
-            "analysis artifacts behind the final report: pit-window forecasting, rival "
-            "attack probabilities, tyre degradation, and weather effects."
-        )
         if pit_note:
             st.caption(pit_note)
         if context is None and strategy_reason:
             st.caption(strategy_reason)
 
     with pit_tab:
-        st.subheader("Pit Window")
-        st.write(
-            "Pit Window estimates how many laps remain before a stop becomes strategically "
-            "available for the selected driver. Lower values mean the car is near the crossover "
-            "point where tyre age, pace, traffic gaps, and pit loss make a stop viable."
+        render_section_callout(
+            "Pit Window",
+            "Estimates how many laps remain before a stop becomes strategically available. Lower values mean the car is near the crossover where tyre age, pace, traffic gaps, and pit loss make a stop viable.",
         )
         if pit_row is None:
             st.caption(pit_note)
@@ -1178,11 +1404,9 @@ def main():
                 st.warning(issue)
 
     with strategy_tab:
-        st.subheader("Undercut / Overcut")
-        st.write(
-            "Undercut / Overcut compares two rival-focused strategy attacks. An undercut "
-            "stops before the car ahead to exploit fresh tyres; an overcut stays out longer "
-            "to use clean air, tyre offset, or track position."
+        render_section_callout(
+            "Undercut / Overcut",
+            "Compares two rival-focused strategy attacks: stop before the car ahead to exploit fresh tyres, or stay out longer to use clean air, tyre offset, or track position.",
         )
         if context is None:
             st.caption(strategy_reason)
@@ -1210,21 +1434,25 @@ def main():
                 st.dataframe(pd.DataFrame([overcut_row]), width="stretch")
 
     with degradation_tab:
-        st.subheader("Tyre Degradation")
-        st.write(
-            "Degradation context shows how the selected compound has behaved as tyre age "
-            "increases, helping explain whether the stint still has enough life to defend, "
-            "attack, or extend."
+        render_section_callout(
+            "Tyre Degradation",
+            "Shows how the selected compound has behaved as tyre age increases, helping explain whether the stint still has enough life to defend, attack, or extend.",
         )
         if selected is None:
             st.caption("No lap record available for degradation context.")
         else:
-            st.write(f"Current compound: `{compound}` | stint age: `{tire_age}` laps")
+            st.markdown(
+                f"Current compound: {tyre_badge(compound)} &nbsp; Stint age: `{tire_age}` laps",
+                unsafe_allow_html=True,
+            )
             st.caption(degradation_read(tire_age))
             render_degradation(compound, tire_age, artifacts["degradation"])
 
     with weather_tab:
-        st.subheader("Weather Context")
+        render_section_callout(
+            "Weather Context",
+            "Connects track and air conditions to lap-time variation in the saved season sample, giving context for tyre behavior and stint durability.",
+        )
         render_weather(artifacts["weather"], compound)
 
     with evidence_tab:
