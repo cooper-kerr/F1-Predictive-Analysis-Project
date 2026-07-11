@@ -473,6 +473,12 @@ def render_degradation(compound, tire_age, artifact):
 
 def render_weather(artifact, compound):
     coefs = artifact["coefficients"].copy()
+    st.info(
+        "Weather context estimates how track and air conditions relate to lap-time "
+        "variation in the saved season data. In race terms, hotter track surfaces can "
+        "change tyre behavior, stint durability, and the value of stopping early versus "
+        "extending a stint."
+    )
     st.write(
         f"OLS explanatory regression, R² = {artifact['r_squared']:.3f}, "
         f"rows = {artifact['n_rows']:,}."
@@ -528,6 +534,13 @@ def main():
     st.subheader(f"{race} 2024 | {driver} | Lap {lap} of {total_laps}")
 
     st.header("1. Pit Window")
+    st.info(
+        "Pit Window estimates how many laps remain before a stop becomes strategically "
+        "available for the selected driver. A low value means the model sees the car as "
+        "already near the crossover point where tyre age, pace, traffic gaps, and pit "
+        "loss make a stop viable; a higher value means the current stint still looks "
+        "early or poorly positioned."
+    )
     pit_row, pit_note = nearest_pit_label_row(pit_df, race, driver, lap)
     if pit_row is None:
         st.info(pit_note)
@@ -543,6 +556,21 @@ def main():
             pit_filled.extend(remaining_missing)
         pred = float(artifacts["pit"]["model"].predict(pit_x)[0])
         st.metric("Predicted laps until pit window opens", f"{pred:.1f}")
+        if pred <= 1:
+            st.caption(
+                "Race read: the pit window is effectively open. A team would start "
+                "weighing track position, tyre availability, and traffic on pit exit."
+            )
+        elif pred <= 5:
+            st.caption(
+                "Race read: the car is approaching its viable stop phase. This is where "
+                "teams watch rival gaps closely and prepare to react to undercut pressure."
+            )
+        else:
+            st.caption(
+                "Race read: the model does not yet see a strong reason to stop. Staying "
+                "out may preserve tyre offset or avoid rejoining into traffic."
+            )
         st.caption(
             f"Saved label row: lap {int(pit_row['lap'])}, context `{pit_row['context']}`, "
             f"compound `{pit_row['compound']}`."
@@ -560,6 +588,12 @@ def main():
             st.warning(issue)
 
     st.header("2. Undercut / Overcut")
+    st.info(
+        "Undercut / Overcut compares two rival-focused strategy attacks. An undercut "
+        "means stopping before the car ahead and using fresh tyres to gain time; an "
+        "overcut means staying out longer, using clean air or tyre offset, and trying "
+        "to emerge ahead after the rival stops."
+    )
     context, reason = build_strategy_context(session, driver, lap)
     if context is None:
         st.info(reason)
@@ -573,6 +607,24 @@ def main():
         p1, p2 = st.columns(2)
         p1.metric("Undercut success probability", f"{undercut_prob:.1%}")
         p2.metric("Overcut success probability", f"{overcut_prob:.1%}")
+        if undercut_prob >= overcut_prob + 0.1:
+            st.caption(
+                "Race read: the model favors attacking early. That usually points to a "
+                "usable gap, meaningful fresh-tyre benefit, or a rival ahead who may be "
+                "vulnerable on older tyres."
+            )
+        elif overcut_prob >= undercut_prob + 0.1:
+            st.caption(
+                "Race read: the model favors patience. Staying out may be stronger when "
+                "track position, traffic, or current tyre performance make an immediate "
+                "stop less attractive."
+            )
+        else:
+            st.caption(
+                "Race read: the two options are close. In a real race this is the kind "
+                "of marginal call where pit-lane traffic, safety-car risk, and tyre "
+                "inventory can decide the strategy."
+            )
         st.caption(
             "These are live scenario probabilities using the saved model feature lists. "
             "They are marked not applicable when a clean direct-rival context cannot be built."
@@ -584,6 +636,12 @@ def main():
             st.dataframe(pd.DataFrame([overcut_row]), width="stretch")
 
     st.header("3. Degradation Context")
+    st.info(
+        "Degradation context shows how the selected compound has behaved as tyre age "
+        "increases. In race strategy, this helps explain whether a driver is likely "
+        "losing pace because the tyre is fading, or whether the stint still has enough "
+        "life to defend, attack, or extend."
+    )
     selected = current_lap_row(laps, driver, lap)
     if selected is None:
         st.info("No lap record available for degradation context.")
@@ -593,6 +651,22 @@ def main():
         compound = str(selected.get("Compound", "UNKNOWN"))
         tire_age = selected.get("TyreLife", np.nan)
         st.write(f"Current compound: `{compound}` | stint age: `{tire_age}` laps")
+        if pd.notna(tire_age):
+            if tire_age < 8:
+                st.caption(
+                    "Race read: this is an early-stint tyre. Pace should still be more "
+                    "about warm-up, traffic, and fuel load than heavy wear."
+                )
+            elif tire_age < 20:
+                st.caption(
+                    "Race read: this is the middle of the stint, where degradation "
+                    "starts to matter for defending position and timing the stop."
+                )
+            else:
+                st.caption(
+                    "Race read: this is an older tyre phase. If lap-time delta is rising, "
+                    "the driver may be exposed to undercuts or forced into tyre management."
+                )
         render_degradation(compound, tire_age, artifacts["degradation"])
 
     st.header("4. Weather Context")
