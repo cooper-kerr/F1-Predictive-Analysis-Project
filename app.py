@@ -3,9 +3,10 @@ import sys
 from types import SimpleNamespace
 
 import joblib
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 
@@ -33,6 +34,40 @@ def load_pit_labels():
 def pit_feature_medians():
     df = pd.read_csv(DATA_DIR / "f1_pit_window_labels.csv")
     return df.median(numeric_only=True).to_dict()
+
+
+def apply_theme():
+    st.markdown(
+        """
+        <style>
+        .main .block-container {
+            max-width: 1180px;
+            padding-top: 2.25rem;
+            padding-bottom: 4rem;
+        }
+        h1, h2, h3 {
+            letter-spacing: 0;
+        }
+        [data-testid="stSidebar"] {
+            border-right: 1px solid rgba(148, 163, 184, 0.18);
+        }
+        [data-testid="stMetric"] {
+            background: rgba(148, 163, 184, 0.08);
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            border-radius: 8px;
+            padding: 0.9rem 1rem;
+        }
+        .stAlert {
+            border-radius: 8px;
+        }
+        div[data-testid="stExpander"] {
+            border-radius: 8px;
+            border-color: rgba(148, 163, 184, 0.24);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_resource
@@ -362,91 +397,159 @@ def render_degradation(compound, tire_age, artifact):
     current_bin = age_bin_for_tire_age(tire_age, labels)
     current_x = labels.index(current_bin) if current_bin in labels else None
 
-    fig, (ax, ax_count) = plt.subplots(
-        2,
-        1,
-        figsize=(7.5, 5.2),
-        sharex=True,
-        gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08},
+    colors = {"2022-2023": "#64748B", "2024": "#DC2626"}
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        row_heights=[0.68, 0.32],
+        subplot_titles=(
+            f"{compound} degradation pace profile",
+            "Stint support by tyre-age bin",
+        ),
     )
-    colors = {"2022-2023": "#667085", "2024": "#C43B2F"}
+
     for era, group in subset.groupby("era"):
         group = group.sort_values("age_bin")
-        x = [labels.index(str(age_bin)) for age_bin in group["age_bin"]]
-        y = group["median_delta_s"].to_numpy()
+        x = [str(age_bin) for age_bin in group["age_bin"]]
+        y = group["median_delta_s"].round(3).to_numpy()
         low_support = group["n_stints"].to_numpy() < 15
         color = colors.get(era, None)
-        ax.plot(x, y, marker="o", color=color, label=f"{era} median delta")
-        if low_support.any():
-            ax.scatter(
-                np.array(x)[low_support],
-                y[low_support],
-                s=110,
-                facecolors="white",
-                edgecolors=color,
-                linewidths=2,
-                zorder=4,
-                label=f"{era} <15 stints",
-            )
+        custom = np.stack(
+            [
+                group["mean_delta_s"].round(3).to_numpy(),
+                group["n_laps"].to_numpy(),
+                group["n_stints"].to_numpy(),
+            ],
+            axis=-1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                mode="lines+markers",
+                name=f"{era} median delta",
+                line=dict(color=color, width=3),
+                marker=dict(
+                    size=10,
+                    color=np.where(low_support, "#FFFFFF", color),
+                    line=dict(color=color, width=np.where(low_support, 2.5, 0)),
+                ),
+                customdata=custom,
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>"
+                    "Tyre age: %{x}<br>"
+                    "Median delta: %{y:.3f}s/lap<br>"
+                    "Mean delta: %{customdata[0]:.3f}s/lap<br>"
+                    "Laps: %{customdata[1]:,.0f}<br>"
+                    "Stints: %{customdata[2]:,.0f}<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=1,
+        )
 
     era_2024 = subset[subset["era"] == "2024"].sort_values("age_bin")
     if current_x is not None and not era_2024.empty:
         current_row = era_2024[era_2024["age_bin"].astype(str) == current_bin]
         if not current_row.empty:
             y = float(current_row.iloc[0]["median_delta_s"])
-            ax.axvline(current_x, color="#1D2939", linestyle=":", linewidth=1.5)
-            ax.scatter(
-                [current_x],
-                [y],
-                marker="*",
-                s=230,
-                color="#1D2939",
-                zorder=5,
-                label=f"You are here ({current_bin})",
+            fig.add_vline(
+                x=current_bin,
+                line_width=2,
+                line_dash="dot",
+                line_color="#0F172A",
+                row="all",
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[current_bin],
+                    y=[y],
+                    mode="markers",
+                    name=f"You are here ({current_bin})",
+                    marker=dict(
+                        symbol="star",
+                        size=18,
+                        color="#0F172A",
+                        line=dict(color="#FFFFFF", width=1.5),
+                    ),
+                    hovertemplate=(
+                        "<b>Selected lap</b><br>"
+                        "Tyre age bin: %{x}<br>"
+                        "2024 median delta: %{y:.3f}s/lap<extra></extra>"
+                    ),
+                ),
+                row=1,
+                col=1,
             )
 
-    ax.set_title(f"{compound} saved degradation pace profile")
-    ax.set_ylabel("Median delta vs stint best (s/lap)")
-    ax.legend()
-    ax.grid(True, alpha=0.25)
-
-    width = 0.36
-    offsets = {"2022-2023": -width / 2, "2024": width / 2}
     for era, group in subset.groupby("era"):
         group = group.sort_values("age_bin")
-        x = np.array([labels.index(str(age_bin)) for age_bin in group["age_bin"]])
+        x = [str(age_bin) for age_bin in group["age_bin"]]
         counts = group["n_stints"].to_numpy()
-        colors_for_bars = np.where(counts < 15, "#F79009", colors.get(era, "#98A2B3"))
-        bars = ax_count.bar(
-            x + offsets.get(era, 0),
-            counts,
-            width=width,
-            color=colors_for_bars,
-            alpha=0.75,
-            label=f"{era} stints",
+        low_support = counts < 15
+        fig.add_trace(
+            go.Bar(
+                x=x,
+                y=counts,
+                name=f"{era} stint count",
+                marker=dict(
+                    color=np.where(low_support, "#F59E0B", colors.get(era, "#94A3B8")),
+                    line=dict(color="rgba(15, 23, 42, 0.28)", width=1),
+                ),
+                opacity=0.78,
+                customdata=np.stack([group["n_laps"].to_numpy()], axis=-1),
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>"
+                    "Tyre age: %{x}<br>"
+                    "Stints: %{y:,.0f}<br>"
+                    "Laps: %{customdata[0]:,.0f}<extra></extra>"
+                ),
+                text=counts,
+                textposition="outside",
+            ),
+            row=2,
+            col=1,
         )
-        for bar, count in zip(bars, counts):
-            ax_count.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height(),
-                f"{int(count)}",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-                rotation=90 if count >= 100 else 0,
-            )
 
-    if current_x is not None:
-        ax_count.axvline(current_x, color="#1D2939", linestyle=":", linewidth=1.5)
-    ax_count.axhline(15, color="#F79009", linestyle="--", linewidth=1)
-    ax_count.set_ylabel("Stints")
-    ax_count.set_xlabel("Tyre age bin")
-    ax_count.set_xticks(range(len(labels)))
-    ax_count.set_xticklabels(labels, rotation=0)
-    ax_count.legend(loc="upper right", fontsize=8)
-    ax_count.grid(True, axis="y", alpha=0.25)
-
-    st.pyplot(fig, clear_figure=True)
+    fig.add_hline(
+        y=15,
+        line_width=1.5,
+        line_dash="dash",
+        line_color="#F59E0B",
+        annotation_text="low-support threshold",
+        annotation_position="top left",
+        row=2,
+        col=1,
+    )
+    fig.update_xaxes(
+        categoryorder="array",
+        categoryarray=labels,
+        title_text="Tyre age bin",
+        row=2,
+        col=1,
+    )
+    fig.update_yaxes(title_text="Median delta vs stint best (s/lap)", row=1, col=1)
+    fig.update_yaxes(title_text="Stints", row=2, col=1, rangemode="tozero")
+    fig.update_layout(
+        height=680,
+        hovermode="x unified",
+        barmode="group",
+        margin=dict(l=24, r=24, t=74, b=36),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(248,250,252,0.96)",
+        font=dict(size=13),
+    )
+    st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
 
     support_display = subset[
         ["era", "age_bin", "n_stints", "n_laps", "median_delta_s", "mean_delta_s"]
@@ -576,7 +679,9 @@ def main():
             f"compound `{pit_row['compound']}`."
         )
         with st.expander("Pit-window feature vector"):
-            display = pit_row[list(artifacts["pit"]["model"].feature_names_in_)].to_frame("value")
+            display = pit_row[
+                list(artifacts["pit"]["model"].feature_names_in_)
+            ].astype(str).to_frame("value")
             st.dataframe(display, width="stretch")
         if pit_filled:
             st.caption(
