@@ -18,9 +18,14 @@ Run:
 import sys
 import warnings
 import joblib
-import numpy as np
 import pandas as pd
 from pathlib import Path
+
+from strategy_features import (
+    prepare_strategy_frame,
+    strategy_vector,
+    undercut_values,
+)
 
 warnings.filterwarnings('ignore')
 
@@ -38,19 +43,7 @@ model     = artefacts['model']
 FEATURES  = artefacts['features']
 
 df_raw = pd.read_csv(DATASET_PATH)
-
-# Rebuild compound dummies (must match training)
-compound_dummies = pd.get_dummies(df_raw['compound'], prefix='compound')
-df = pd.concat([df_raw, compound_dummies], axis=1)
-
-for col in FEATURES:
-    if col not in df.columns:
-        df[col] = 0
-
-REQUIRED = ['gap_ahead', 'tire_age', 'car_ahead_tire_age', 'own_pace', 'threat_pace']
-df = df.dropna(subset=REQUIRED + ['undercut_success']).copy()
-for col in FEATURES:
-    df[col] = df[col].fillna(df[col].median())
+df, FEATURES = prepare_strategy_frame(df_raw, 'undercut', FEATURES)
 
 # Predict probabilities on full dataset
 X     = df[FEATURES].values.astype(float)
@@ -179,38 +172,20 @@ def mode_scenario():
     print("\n  Compound options: SOFT / MEDIUM / HARD / INTERMEDIATE / WET")
     compound_raw = input("  Your compound [MEDIUM]: ").strip().upper() or 'MEDIUM'
 
-    # Build feature vector
-    tire_age_advantage = car_ahead_tire_age - tire_age
-    pace_delta         = own_pace_raw - threat_pace_raw
-    pit_loss_fraction  = pit_loss / own_pace_raw
-
-    row = {f: 0.0 for f in FEATURES}
-    row['gap_ahead']          = gap_ahead
-    row['tire_age']           = float(tire_age)
-    row['car_ahead_tire_age'] = float(car_ahead_tire_age)
-    row['tire_age_advantage'] = float(tire_age_advantage)
-    row['own_pace']           = own_pace_raw
-    row['threat_pace']        = threat_pace_raw
-    row['pace_delta']         = pace_delta
-    row['deg_delta']          = deg_delta
-    row['ca_deg_delta']       = ca_deg_delta
-    row['closing_rate']       = closing_rate
-    row['pit_loss']           = pit_loss
-    row['pit_loss_fraction']  = pit_loss_fraction
-    row['race_progress']      = race_progress
-
-    compound_col = f'compound_{compound_raw}'
-    if compound_col in row:
-        row[compound_col] = 1.0
-
-    X_scenario = np.array([[row[f] for f in FEATURES]])
+    row = undercut_values(
+        gap_ahead, tire_age, car_ahead_tire_age, own_pace_raw, threat_pace_raw,
+        deg_delta, ca_deg_delta, closing_rate, pit_loss, race_progress, compound_raw,
+    )
+    X_scenario, row = strategy_vector(FEATURES, row, {})
     prob = model.predict_proba(X_scenario)[0, 1]
 
     # Sensitivity: what changes if gap halves / doubles?
     row_half = dict(row); row_half['gap_ahead'] = gap_ahead / 2
     row_double = dict(row); row_double['gap_ahead'] = gap_ahead * 2
-    prob_half   = model.predict_proba(np.array([[row_half[f]   for f in FEATURES]]))[0, 1]
-    prob_double = model.predict_proba(np.array([[row_double[f] for f in FEATURES]]))[0, 1]
+    X_half, _ = strategy_vector(FEATURES, row_half, {})
+    X_double, _ = strategy_vector(FEATURES, row_double, {})
+    prob_half = model.predict_proba(X_half)[0, 1]
+    prob_double = model.predict_proba(X_double)[0, 1]
 
     verdict = 'LIKELY SUCCESS' if prob >= 0.5 else 'LIKELY FAILURE'
     bar_len  = int(prob * 30)
@@ -223,8 +198,8 @@ def mode_scenario():
     print(f"  Scenario inputs:")
     print(f"    Gap ahead:        {gap_ahead:.1f}s")
     print(f"    Tire ages:        yours={tire_age}L  car_ahead={car_ahead_tire_age}L  "
-          f"(advantage = {tire_age_advantage:+d} laps)")
-    print(f"    Pace delta:       {pace_delta:+.3f}s (negative = you're faster)")
+          f"(advantage = {row['tire_age_advantage']:+.0f} laps)")
+    print(f"    Pace delta:       {row['pace_delta']:+.3f}s (negative = you're faster)")
     print(f"    Closing rate:     {closing_rate:+.3f}s/lap")
     print(f"    Compound:         {compound_raw}")
     print(f"{'─'*60}")

@@ -7,7 +7,6 @@ without needing a Jupyter kernel.
 import sys
 import fastf1
 import pandas as pd
-import numpy as np
 from pathlib import Path
 import warnings
 import joblib
@@ -26,15 +25,10 @@ import shap
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import seaborn as sns
 
-from f1_strategy_common import (
-    build_gap_timeseries,
-    compute_pit_loss,
-    get_deg_delta,
-    get_pace,
-    has_sc_between,
-)
+from dataset_runner import build_schedule_dataset
+from strategy_attempts import build_undercut_records
+from strategy_features import prepare_strategy_frame
 
 warnings.filterwarnings('ignore')
 
@@ -48,10 +42,6 @@ FIGURES_DIR  = ROOT / 'outputs' / 'figures'
 fastf1.Cache.enable_cache(str(CACHE_DIR))
 
 RANDOM_STATE    = 42
-STABILIZATION   = 4
-GAP_WINDOW      = 3
-MAX_GAP         = 30.0
-MIN_HIST_LAPS   = 3
 TRAIN_YEARS     = [2022, 2023]
 TEST_YEARS      = [2024]
 ALL_YEARS       = TRAIN_YEARS + TEST_YEARS
@@ -61,158 +51,21 @@ MODEL_PATH      = MODEL_DIR / 'f1_undercut_model.pkl'
 plt.style.use('seaborn-v0_8-darkgrid')
 
 
-# ── Label construction ───────────────────────────────────────────────────────
-
-def build_undercut_records(session, year, circuit_name):
-    laps = session.laps.copy()
-    laps = laps[laps['LapTime'].notna()].copy()
-    total_laps = int(laps['LapNumber'].max())
-
-    gaps_df  = build_gap_timeseries(session)
-    pit_loss = compute_pit_loss(session)
-
-    gaps_idx = gaps_df.set_index(['Driver', 'LapNumber'])
-    laps_idx = laps.set_index(['Driver', 'LapNumber'])
-
-    records  = []
-    pit_rows = laps[laps['PitInTime'].notna()][['Driver', 'LapNumber']].copy()
-
-    for _, pit_row in pit_rows.iterrows():
-        driver  = pit_row['Driver']
-        pit_lap = int(pit_row['LapNumber'])
-        dec_lap = pit_lap - 1
-
-        if dec_lap < MIN_HIST_LAPS:
-            continue
-
-        try:
-            gap_row = gaps_idx.loc[(driver, dec_lap)]
-            if isinstance(gap_row, pd.DataFrame):
-                gap_row = gap_row.iloc[0]
-        except KeyError:
-            continue
-
-        car_ahead = gap_row['car_ahead_driver']
-        gap_ahead = gap_row['gap_ahead']
-
-        if car_ahead is None or pd.isna(car_ahead) or pd.isna(gap_ahead):
-            continue
-        if gap_ahead > MAX_GAP or gap_ahead <= 0:
-            continue
-
-        car_ahead_pits = laps[
-            (laps['Driver'] == car_ahead) &
-            (laps['PitInTime'].notna()) &
-            (laps['LapNumber'] > pit_lap)
-        ]['LapNumber']
-
-        if car_ahead_pits.empty:
-            continue
-
-        ca_pit_lap = int(car_ahead_pits.min())
-        eval_lap   = min(ca_pit_lap + STABILIZATION, total_laps)
-
-        if has_sc_between(laps, driver, pit_lap, eval_lap):
-            continue
-
-        eval_laps_session = laps[
-            laps['LapNumber'] == eval_lap
-        ][['Driver', 'LapStartTime']].dropna().sort_values('LapStartTime').reset_index(drop=True)
-
-        if eval_laps_session.empty:
-            continue
-
-        order = {row['Driver']: idx for idx, row in eval_laps_session.iterrows()}
-
-        if driver not in order or car_ahead not in order:
-            continue
-
-        undercut_success = 1 if order[driver] < order[car_ahead] else 0
-
-        driver_laps = laps[laps['Driver'] == driver].sort_values('LapNumber')
-        ca_laps     = laps[laps['Driver'] == car_ahead].sort_values('LapNumber')
-
-        own_pace     = get_pace(driver_laps, dec_lap + 1)
-        threat_pace  = get_pace(ca_laps,     dec_lap + 1)
-        deg_delta    = get_deg_delta(driver_laps, dec_lap + 1)
-        ca_deg_delta = get_deg_delta(ca_laps,     dec_lap + 1)
-
-        try:
-            dec_row = laps_idx.loc[(driver, dec_lap)]
-            if isinstance(dec_row, pd.DataFrame):
-                dec_row = dec_row.iloc[0]
-            ca_dec_row = laps_idx.loc[(car_ahead, dec_lap)]
-            if isinstance(ca_dec_row, pd.DataFrame):
-                ca_dec_row = ca_dec_row.iloc[0]
-        except KeyError:
-            continue
-
-        tire_age    = dec_row.get('TyreLife',  np.nan)
-        compound    = dec_row.get('Compound',  'UNKNOWN')
-        ca_tire_age = ca_dec_row.get('TyreLife', np.nan)
-
-        recent_gaps = gaps_df[
-            (gaps_df['Driver'] == driver) &
-            (gaps_df['LapNumber'] >= dec_lap - GAP_WINDOW) &
-            (gaps_df['LapNumber'] <= dec_lap)
-        ].sort_values('LapNumber').dropna(subset=['gap_ahead'])
-
-        closing_rate = float(np.polyfit(
-            recent_gaps['LapNumber'].values,
-            recent_gaps['gap_ahead'].values, 1
-        )[0]) if len(recent_gaps) >= 2 else np.nan
-
-        pace_delta         = (own_pace - threat_pace) if not pd.isna(own_pace) and not pd.isna(threat_pace) else np.nan
-        tire_age_advantage = (float(ca_tire_age) - float(tire_age)) if not pd.isna(ca_tire_age) and not pd.isna(tire_age) else np.nan
-        pit_loss_fraction  = pit_loss / own_pace if not pd.isna(own_pace) and own_pace > 0 else np.nan
-
-        records.append({
-            'year':               year,
-            'circuit':            circuit_name,
-            'driver':             driver,
-            'car_ahead':          car_ahead,
-            'pit_lap':            pit_lap,
-            'gap_ahead':          gap_ahead,
-            'tire_age':           float(tire_age) if not pd.isna(tire_age) else np.nan,
-            'car_ahead_tire_age': float(ca_tire_age) if not pd.isna(ca_tire_age) else np.nan,
-            'tire_age_advantage': tire_age_advantage,
-            'compound':           str(compound),
-            'own_pace':           own_pace,
-            'threat_pace':        threat_pace,
-            'pace_delta':         pace_delta,
-            'deg_delta':          deg_delta,
-            'ca_deg_delta':       ca_deg_delta,
-            'closing_rate':       closing_rate,
-            'pit_loss':           pit_loss,
-            'pit_loss_fraction':  pit_loss_fraction,
-            'race_progress':      dec_lap / total_laps if total_laps > 0 else np.nan,
-            'undercut_success':   undercut_success,
-        })
-
-    return records
-
-
 def build_full_dataset(years):
-    all_records = []
-    for year in years:
-        schedule = fastf1.get_event_schedule(year, include_testing=False)
-        gp_names = schedule['EventName'].tolist()
-        print(f'\n── {year}: {len(gp_names)} races ──')
-        for gp in gp_names:
-            try:
-                session = fastf1.get_session(year, gp, 'R')
-                session.load(laps=True, telemetry=False, weather=False, messages=False)
-                # Guard: session.laps must be non-empty for this session to be useful
-                if session.laps is None or len(session.laps) == 0:
-                    print(f'  {gp:40s}  SKIP: no lap data')
-                    continue
-                records = build_undercut_records(session, year, gp)
-                all_records.extend(records)
-                print(f'  {gp:40s}  {len(records):3d} undercut attempts')
-            except Exception as e:
-                short = str(e)[:80]
-                print(f'  {gp:40s}  FAILED: {short}')
-    return pd.DataFrame(all_records)
+    return build_schedule_dataset(
+        years,
+        build_undercut_records,
+        'undercut attempts',
+        schedule_loader=fastf1.get_event_schedule,
+        session_loader=fastf1.get_session,
+        session_load_kwargs={
+            'laps': True,
+            'telemetry': False,
+            'weather': False,
+            'messages': False,
+        },
+        header_style='box',
+    )
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -241,23 +94,7 @@ if __name__ == '__main__':
           f'| Failure {vc.get(0,0):,} ({vc.get(0,0)/len(df):.1%})')
 
     # 2. Feature engineering
-    compound_dummies = pd.get_dummies(df['compound'], prefix='compound')
-    df_feat = pd.concat([df, compound_dummies], axis=1)
-
-    BASE_FEATURES = [
-        'gap_ahead', 'tire_age', 'car_ahead_tire_age', 'tire_age_advantage',
-        'own_pace', 'threat_pace', 'pace_delta', 'deg_delta', 'ca_deg_delta',
-        'closing_rate', 'pit_loss', 'pit_loss_fraction', 'race_progress',
-    ]
-    FEATURES = BASE_FEATURES + [c for c in compound_dummies.columns]
-
-    REQUIRED = ['gap_ahead', 'tire_age', 'car_ahead_tire_age', 'own_pace', 'threat_pace']
-    df_model = df_feat.dropna(subset=REQUIRED + ['undercut_success']).copy()
-    for col in FEATURES:
-        if col in df_model.columns:
-            df_model[col] = df_model[col].fillna(df_model[col].median())
-        else:
-            df_model[col] = 0
+    df_model, FEATURES = prepare_strategy_frame(df, 'undercut')
 
     print(f'\nModelling dataset: {len(df_model):,} samples, {len(FEATURES)} features')
     print(f'Class balance: {df_model["undercut_success"].mean():.1%} successful undercuts')

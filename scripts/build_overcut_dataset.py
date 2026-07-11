@@ -17,7 +17,6 @@ Train: 2022–2023  |  Test: 2024  (temporal holdout, consistent with undercut)
 import sys
 import fastf1
 import pandas as pd
-import numpy as np
 from pathlib import Path
 import warnings
 import joblib
@@ -37,13 +36,9 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from f1_strategy_common import (
-    build_gap_timeseries,
-    compute_pit_loss,
-    get_deg_delta,
-    get_pace,
-    has_sc_between,
-)
+from dataset_runner import build_schedule_dataset
+from strategy_attempts import build_overcut_records
+from strategy_features import prepare_strategy_frame
 
 warnings.filterwarnings('ignore')
 
@@ -56,10 +51,6 @@ FIGURES_DIR = ROOT / 'outputs' / 'figures'
 fastf1.Cache.enable_cache(str(CACHE_DIR))
 
 RANDOM_STATE    = 42
-STABILIZATION   = 4
-GAP_WINDOW      = 3
-MAX_GAP         = 30.0
-MIN_HIST_LAPS   = 3
 TRAIN_YEARS     = [2022, 2023]
 TEST_YEARS      = [2024]
 ALL_YEARS       = TRAIN_YEARS + TEST_YEARS
@@ -69,191 +60,23 @@ MODEL_PATH      = MODEL_DIR / 'f1_overcut_model.pkl'
 plt.style.use('seaborn-v0_8-darkgrid')
 
 
-# ── Overcut label construction ───────────────────────────────────────────────
-
-def build_overcut_records(session, year, circuit_name):
-    """
-    For each pit stop in the session, treat the pitting car as the one
-    that WAS ahead. Find the driver directly behind who stays out.
-    Label = 1 if the stay-out driver ends up ahead after both stop.
-
-    Decision point: the lap before the car ahead pits (dec_lap = pit_lap - 1).
-    Evaluation: STABILIZATION laps after the stay-out driver pits.
-    """
-    laps = session.laps.copy()
-    laps = laps[laps['LapTime'].notna()].copy()
-    total_laps = int(laps['LapNumber'].max())
-
-    gaps_df  = build_gap_timeseries(session)
-    pit_loss = compute_pit_loss(session)
-
-    gaps_idx = gaps_df.set_index(['Driver', 'LapNumber'])
-    laps_idx = laps.set_index(['Driver', 'LapNumber'])
-
-    records  = []
-
-    # Iterate over every pit stop — treat each pitter as the "car ahead that pitted"
-    pit_rows = laps[laps['PitInTime'].notna()][['Driver', 'LapNumber']].copy()
-
-    for _, pit_row in pit_rows.iterrows():
-        pitting_car = pit_row['Driver']      # car ahead that pits
-        pit_lap     = int(pit_row['LapNumber'])
-        dec_lap     = pit_lap - 1            # decision point for stay-out driver
-
-        if dec_lap < MIN_HIST_LAPS:
-            continue
-
-        # ── Who is directly behind the pitting car? ───────────────────────
-        try:
-            gap_row = gaps_idx.loc[(pitting_car, dec_lap)]
-            if isinstance(gap_row, pd.DataFrame):
-                gap_row = gap_row.iloc[0]
-        except KeyError:
-            continue
-
-        stay_out = gap_row['car_behind_driver']
-        if stay_out is None or pd.isna(stay_out):
-            continue   # pitting car is last — no one behind
-
-        # Gap from stay-out driver's perspective = gap_behind of pitting car
-        gap_behind_pitter = gap_row['gap_behind']
-        if pd.isna(gap_behind_pitter) or gap_behind_pitter > MAX_GAP or gap_behind_pitter <= 0:
-            continue
-
-        # ── Confirm stay-out driver pits AFTER the pitting car ───────────
-        stay_out_pits = laps[
-            (laps['Driver'] == stay_out) &
-            (laps['PitInTime'].notna()) &
-            (laps['LapNumber'] > pit_lap)
-        ]['LapNumber']
-
-        if stay_out_pits.empty:
-            continue   # stay-out driver never pits after — last stint, skip
-
-        stay_out_pit_lap  = int(stay_out_pits.min())
-        stay_out_laps_num = stay_out_pit_lap - pit_lap   # how long they stayed out
-        eval_lap          = min(stay_out_pit_lap + STABILIZATION, total_laps)
-
-        if stay_out_laps_num < 1:
-            continue   # stayed out for 0 laps — not a real overcut
-
-        # ── SC/VSC contamination ──────────────────────────────────────────
-        if has_sc_between(laps, stay_out, pit_lap, eval_lap):
-            continue
-
-        # ── Outcome: relative order at eval_lap ───────────────────────────
-        eval_laps_session = laps[
-            laps['LapNumber'] == eval_lap
-        ][['Driver', 'LapStartTime']].dropna().sort_values('LapStartTime').reset_index(drop=True)
-
-        if eval_laps_session.empty:
-            continue
-
-        order = {row['Driver']: idx for idx, row in eval_laps_session.iterrows()}
-
-        if stay_out not in order or pitting_car not in order:
-            continue   # one retired
-
-        # Overcut success = stay-out driver is now AHEAD of the pitting car
-        overcut_success = 1 if order[stay_out] < order[pitting_car] else 0
-
-        # ── Feature extraction at dec_lap ─────────────────────────────────
-        stay_out_laps_df = laps[laps['Driver'] == stay_out].sort_values('LapNumber')
-        pitting_laps_df  = laps[laps['Driver'] == pitting_car].sort_values('LapNumber')
-
-        own_pace     = get_pace(stay_out_laps_df, dec_lap + 1)
-        threat_pace  = get_pace(pitting_laps_df,  dec_lap + 1)
-        deg_delta    = get_deg_delta(stay_out_laps_df, dec_lap + 1)
-        ca_deg_delta = get_deg_delta(pitting_laps_df,  dec_lap + 1)
-
-        try:
-            so_dec  = laps_idx.loc[(stay_out, dec_lap)]
-            if isinstance(so_dec, pd.DataFrame): so_dec = so_dec.iloc[0]
-            pit_dec = laps_idx.loc[(pitting_car, dec_lap)]
-            if isinstance(pit_dec, pd.DataFrame): pit_dec = pit_dec.iloc[0]
-        except KeyError:
-            continue
-
-        tire_age         = so_dec.get('TyreLife',  np.nan)
-        compound         = so_dec.get('Compound',  'UNKNOWN')
-        ca_tire_age      = pit_dec.get('TyreLife', np.nan)   # pitting car's tire age
-
-        # Tire age delta from stay-out driver's view:
-        # positive = stay-out has MORE laps on tires (disadvantage vs fresh rubber)
-        tire_age_delta = (float(tire_age) - float(ca_tire_age)) \
-            if not pd.isna(tire_age) and not pd.isna(ca_tire_age) else np.nan
-
-        # Closing rate on dec_lap window
-        recent_gaps = gaps_df[
-            (gaps_df['Driver'] == pitting_car) &   # gap_behind of pitting car = gap_ahead of stay-out
-            (gaps_df['LapNumber'] >= dec_lap - GAP_WINDOW) &
-            (gaps_df['LapNumber'] <= dec_lap)
-        ].sort_values('LapNumber').dropna(subset=['gap_behind'])
-
-        if len(recent_gaps) >= 2:
-            closing_rate = float(np.polyfit(
-                recent_gaps['LapNumber'].values,
-                recent_gaps['gap_behind'].values, 1
-            )[0])
-        else:
-            closing_rate = np.nan
-
-        pace_delta        = (own_pace - threat_pace) \
-            if not pd.isna(own_pace) and not pd.isna(threat_pace) else np.nan
-        pit_loss_fraction = pit_loss / own_pace \
-            if not pd.isna(own_pace) and own_pace > 0 else np.nan
-
-        records.append({
-            # Metadata
-            'year':            year,
-            'circuit':         circuit_name,
-            'stay_out_driver': stay_out,
-            'pitting_car':     pitting_car,
-            'pit_lap':         pit_lap,            # when car-ahead pitted
-            'stay_out_laps':   stay_out_laps_num,  # how many extra laps stayed out
-            # Features
-            'gap_ahead':          gap_behind_pitter,  # stay-out driver's gap to (now-pitted) car
-            'tire_age':           float(tire_age)   if not pd.isna(tire_age)    else np.nan,
-            'ca_tire_age':        float(ca_tire_age) if not pd.isna(ca_tire_age) else np.nan,
-            'tire_age_delta':     tire_age_delta,     # positive = stay-out more worn
-            'compound':           str(compound),
-            'own_pace':           own_pace,
-            'threat_pace':        threat_pace,
-            'pace_delta':         pace_delta,
-            'deg_delta':          deg_delta,
-            'ca_deg_delta':       ca_deg_delta,
-            'closing_rate':       closing_rate,
-            'pit_loss':           pit_loss,
-            'pit_loss_fraction':  pit_loss_fraction,
-            'race_progress':      dec_lap / total_laps if total_laps > 0 else np.nan,
-            # Label
-            'overcut_success':    overcut_success,
-        })
-
-    return records
-
-
 # ── Dataset construction loop ────────────────────────────────────────────────
 
 def build_full_dataset(years):
-    all_records = []
-    for year in years:
-        schedule = fastf1.get_event_schedule(year, include_testing=False)
-        gp_names = schedule['EventName'].tolist()
-        print(f'\n── {year}: {len(gp_names)} races ──')
-        for gp in gp_names:
-            try:
-                session = fastf1.get_session(year, gp, 'R')
-                session.load(laps=True, telemetry=False, weather=False, messages=False)
-                if session.laps is None or len(session.laps) == 0:
-                    print(f'  {gp:40s}  SKIP: no lap data')
-                    continue
-                records = build_overcut_records(session, year, gp)
-                all_records.extend(records)
-                print(f'  {gp:40s}  {len(records):3d} overcut attempts')
-            except Exception as e:
-                print(f'  {gp:40s}  FAILED: {str(e)[:80]}')
-    return pd.DataFrame(all_records)
+    return build_schedule_dataset(
+        years,
+        build_overcut_records,
+        'overcut attempts',
+        schedule_loader=fastf1.get_event_schedule,
+        session_loader=fastf1.get_session,
+        session_load_kwargs={
+            'laps': True,
+            'telemetry': False,
+            'weather': False,
+            'messages': False,
+        },
+        header_style='box',
+    )
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -283,24 +106,7 @@ if __name__ == '__main__':
           f'  | Failure {vc.get(0,0):,} ({vc.get(0,0)/len(df):.1%})')
 
     # 2. Feature engineering
-    compound_dummies = pd.get_dummies(df['compound'], prefix='compound')
-    df_feat = pd.concat([df, compound_dummies], axis=1)
-
-    BASE_FEATURES = [
-        'gap_ahead', 'tire_age', 'ca_tire_age', 'tire_age_delta',
-        'own_pace', 'threat_pace', 'pace_delta',
-        'deg_delta', 'ca_deg_delta',
-        'closing_rate', 'pit_loss', 'pit_loss_fraction', 'race_progress',
-    ]
-    FEATURES = BASE_FEATURES + [c for c in compound_dummies.columns]
-
-    REQUIRED = ['gap_ahead', 'tire_age', 'ca_tire_age', 'own_pace', 'threat_pace']
-    df_model = df_feat.dropna(subset=REQUIRED + ['overcut_success']).copy()
-    for col in FEATURES:
-        if col in df_model.columns:
-            df_model[col] = df_model[col].fillna(df_model[col].median())
-        else:
-            df_model[col] = 0
+    df_model, FEATURES = prepare_strategy_frame(df, 'overcut')
 
     print(f'\nModelling dataset: {len(df_model):,} samples, {len(FEATURES)} features')
     print(f'Class balance: {df_model["overcut_success"].mean():.1%} successful overcuts')

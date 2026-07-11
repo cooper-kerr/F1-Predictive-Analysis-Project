@@ -92,7 +92,7 @@ def test_sample_strategy_context_and_predictions_from_static_laps():
     assert 0.0 < context["race_progress"] < 1.0
 
     undercut_prob, overcut_prob, undercut_row, overcut_row = app.predict_strategy(
-        context, app.load_artifacts()
+        context, app.load_artifacts(), app.strategy_medians()
     )
 
     assert_probability(undercut_prob)

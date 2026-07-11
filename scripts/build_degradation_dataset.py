@@ -39,6 +39,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+from dataset_runner import build_schedule_dataset
+
 warnings.filterwarnings('ignore')
 
 ROOT         = Path(__file__).parent.parent
@@ -145,27 +147,21 @@ def extract_degradation_laps(session, year: int, circuit: str) -> pd.DataFrame:
 
 
 def build_full_dataset(years):
-    rows = []
-    for year in years:
-        schedule = fastf1.get_event_schedule(year, include_testing=False)
-        gp_names = schedule['EventName'].tolist()
-        print(f'\n-- {year}: {len(gp_names)} races --')
-        for gp in gp_names:
-            try:
-                session = fastf1.get_session(year, gp, 'R')
-                session.load(laps=True, telemetry=False,
-                             weather=False, messages=False)
-                df = extract_degradation_laps(session, year, gp)
-                if df.empty:
-                    print(f'  {gp:40s}  SKIP: no valid laps')
-                    continue
-                rows.append(df)
-                print(f'  {gp:40s}  {len(df):4d} laps')
-            except Exception as e:
-                print(f'  {gp:40s}  FAILED: {str(e)[:80]}')
-    if not rows:
-        return pd.DataFrame()
-    return pd.concat(rows, ignore_index=True)
+    return build_schedule_dataset(
+        years,
+        extract_degradation_laps,
+        'laps',
+        schedule_loader=fastf1.get_event_schedule,
+        session_loader=fastf1.get_session,
+        session_load_kwargs={
+            'laps': True,
+            'telemetry': False,
+            'weather': False,
+            'messages': False,
+        },
+        skip_empty_extractions=True,
+        empty_extraction_message='no valid laps',
+    )
 
 
 def compute_stint_summaries(df: pd.DataFrame) -> pd.DataFrame:

@@ -17,12 +17,14 @@ FIGURE_DIR = ROOT / "outputs" / "figures"
 STATIC_LAPS_PATH = DATA_DIR / "f1_2024_static_laps.csv.gz"
 
 sys.path.append(str(ROOT / "scripts"))
-from f1_strategy_common import (  # noqa: E402
-    build_gap_timeseries,
-    compute_pit_loss,
-    get_deg_delta,
-    get_pace,
+from race_strategy import (  # noqa: E402
+    build_strategy_context,
+    current_lap_row,
+    encode_pit_row,
+    nearest_pit_label_row,
+    predict_strategy,
 )
+from strategy_features import strategy_feature_medians  # noqa: E402
 
 
 @st.cache_data
@@ -461,15 +463,12 @@ def load_session(race_name):
 @st.cache_data
 def strategy_medians():
     out = {}
-    for key, path, target in [
-        ("undercut", DATA_DIR / "f1_undercut_dataset.csv", "undercut_success"),
-        ("overcut", DATA_DIR / "f1_overcut_dataset.csv", "overcut_success"),
+    for key, path in [
+        ("undercut", DATA_DIR / "f1_undercut_dataset.csv"),
+        ("overcut", DATA_DIR / "f1_overcut_dataset.csv"),
     ]:
         df = pd.read_csv(path)
-        dummies = pd.get_dummies(df["compound"], prefix="compound")
-        df = pd.concat([df, dummies], axis=1)
-        numeric = df.drop(columns=[target], errors="ignore").select_dtypes(include=[np.number])
-        out[key] = numeric.median(numeric_only=True).to_dict()
+        out[key] = strategy_feature_medians(df, key)
     return out
 
 
@@ -527,220 +526,6 @@ def age_bin_for_tire_age(tire_age, age_labels):
     if age < 30:
         return "25-30"
     return "30+" if "30+" in age_labels else None
-
-
-def encode_pit_row(row, pit_artifact, medians):
-    model = pit_artifact["model"]
-    encoders = pit_artifact["encoders"]
-    features = list(model.feature_names_in_)
-    values = {}
-    issues = []
-    filled = []
-
-    for feature in features:
-        if feature not in row.index:
-            issues.append(f"`{feature}` missing from pit label row")
-            values[feature] = medians.get(feature, np.nan)
-            if pd.notna(values[feature]):
-                filled.append(feature)
-            continue
-
-        value = row[feature]
-        if feature in encoders:
-            encoder = encoders[feature]
-            value = str(value)
-            if value not in encoder.classes_:
-                if "nan" in encoder.classes_:
-                    value = "nan"
-                else:
-                    issues.append(f"`{feature}` value `{value}` not in saved encoder")
-                    value = encoder.classes_[0]
-            values[feature] = int(encoder.transform([value])[0])
-        else:
-            if pd.notna(value):
-                values[feature] = float(value)
-            else:
-                values[feature] = medians.get(feature, np.nan)
-                if pd.notna(values[feature]):
-                    filled.append(feature)
-
-    return pd.DataFrame([values], columns=features), issues, filled
-
-
-def nearest_pit_label_row(pit_df, race, driver, lap):
-    rows = pit_df[
-        (pit_df["circuit"] == race)
-        & (pit_df["driver"] == driver)
-        & (pit_df["lap"] == lap)
-    ]
-    if not rows.empty:
-        return rows.iloc[0], None
-
-    driver_rows = pit_df[(pit_df["circuit"] == race) & (pit_df["driver"] == driver)]
-    if driver_rows.empty:
-        return None, "No pit-window feature row exists for this driver in the saved labels CSV."
-
-    idx = (driver_rows["lap"] - lap).abs().idxmin()
-    row = driver_rows.loc[idx]
-    return row, f"No exact pit-window row for lap {lap}; using nearest saved row at lap {int(row['lap'])}."
-
-
-def current_lap_row(laps, driver, lap):
-    rows = laps[(laps["Driver"] == driver) & (laps["LapNumber"] == lap)]
-    if rows.empty:
-        return None
-    return rows.iloc[0]
-
-
-def build_strategy_context(session, driver, lap):
-    laps = session.laps.copy()
-    laps = laps[laps["LapTime"].notna()].copy()
-    total_laps = int(laps["LapNumber"].max()) if not laps.empty else 0
-
-    if lap < 3:
-        return None, "Strategy models need at least three historical laps for pace/gap trends."
-
-    gaps_df = build_gap_timeseries(session)
-    gap_rows = gaps_df[(gaps_df["Driver"] == driver) & (gaps_df["LapNumber"] == lap)]
-    if gap_rows.empty:
-        return None, "No clean same-lap gap row exists for this driver/lap."
-
-    gap_row = gap_rows.iloc[0]
-    rival = gap_row.get("car_ahead_driver")
-    gap_ahead = gap_row.get("gap_ahead")
-    if pd.isna(rival) or rival is None:
-        return None, "Not applicable: selected driver has no car directly ahead at this lap."
-    if pd.isna(gap_ahead) or gap_ahead <= 0 or gap_ahead > 30:
-        return None, "Not applicable: direct rival gap is missing or outside the strategy model range."
-
-    driver_laps = laps[laps["Driver"] == driver].sort_values("LapNumber")
-    rival_laps = laps[laps["Driver"] == rival].sort_values("LapNumber")
-    selected = current_lap_row(laps, driver, lap)
-    rival_selected = current_lap_row(laps, rival, lap)
-    if selected is None or rival_selected is None:
-        return None, "Not applicable: selected driver or rival has no lap record at this lap."
-
-    pit_loss = compute_pit_loss(session)
-    own_pace = get_pace(driver_laps, lap + 1)
-    threat_pace = get_pace(rival_laps, lap + 1)
-    deg_delta = get_deg_delta(driver_laps, lap + 1)
-    ca_deg_delta = get_deg_delta(rival_laps, lap + 1)
-
-    recent_driver_gaps = gaps_df[
-        (gaps_df["Driver"] == driver)
-        & (gaps_df["LapNumber"] >= lap - 3)
-        & (gaps_df["LapNumber"] <= lap)
-    ].sort_values("LapNumber").dropna(subset=["gap_ahead"])
-    closing_undercut = (
-        float(np.polyfit(recent_driver_gaps["LapNumber"], recent_driver_gaps["gap_ahead"], 1)[0])
-        if len(recent_driver_gaps) >= 2
-        else np.nan
-    )
-
-    recent_rival_gaps = gaps_df[
-        (gaps_df["Driver"] == rival)
-        & (gaps_df["LapNumber"] >= lap - 3)
-        & (gaps_df["LapNumber"] <= lap)
-    ].sort_values("LapNumber").dropna(subset=["gap_behind"])
-    closing_overcut = (
-        float(np.polyfit(recent_rival_gaps["LapNumber"], recent_rival_gaps["gap_behind"], 1)[0])
-        if len(recent_rival_gaps) >= 2
-        else np.nan
-    )
-
-    tire_age = selected.get("TyreLife", np.nan)
-    rival_tire_age = rival_selected.get("TyreLife", np.nan)
-    compound = str(selected.get("Compound", "UNKNOWN"))
-    pace_delta = own_pace - threat_pace if pd.notna(own_pace) and pd.notna(threat_pace) else np.nan
-    pit_loss_fraction = pit_loss / own_pace if pd.notna(own_pace) and own_pace > 0 else np.nan
-
-    context = {
-        "driver": driver,
-        "rival": rival,
-        "lap": lap,
-        "total_laps": total_laps,
-        "compound": compound,
-        "tire_age": float(tire_age) if pd.notna(tire_age) else np.nan,
-        "rival_tire_age": float(rival_tire_age) if pd.notna(rival_tire_age) else np.nan,
-        "gap_ahead": float(gap_ahead),
-        "own_pace": own_pace,
-        "threat_pace": threat_pace,
-        "pace_delta": pace_delta,
-        "deg_delta": deg_delta,
-        "ca_deg_delta": ca_deg_delta,
-        "pit_loss": pit_loss,
-        "pit_loss_fraction": pit_loss_fraction,
-        "race_progress": lap / total_laps if total_laps else np.nan,
-        "closing_undercut": closing_undercut,
-        "closing_overcut": closing_overcut,
-    }
-    return context, None
-
-
-def strategy_vector(features, base_values, medians):
-    row = {feature: 0.0 for feature in features}
-    for feature, value in base_values.items():
-        if feature in row:
-            row[feature] = value
-    for feature in features:
-        if pd.isna(row[feature]):
-            row[feature] = medians.get(feature, 0.0)
-    return pd.DataFrame([[row[feature] for feature in features]], columns=features), row
-
-
-def predict_strategy(context, artifacts):
-    medians = strategy_medians()
-    compound = context["compound"]
-
-    undercut_features = artifacts["undercut"]["features"]
-    undercut_base = {
-        "gap_ahead": context["gap_ahead"],
-        "tire_age": context["tire_age"],
-        "car_ahead_tire_age": context["rival_tire_age"],
-        "tire_age_advantage": context["rival_tire_age"] - context["tire_age"]
-        if pd.notna(context["rival_tire_age"]) and pd.notna(context["tire_age"])
-        else np.nan,
-        "own_pace": context["own_pace"],
-        "threat_pace": context["threat_pace"],
-        "pace_delta": context["pace_delta"],
-        "deg_delta": context["deg_delta"],
-        "ca_deg_delta": context["ca_deg_delta"],
-        "closing_rate": context["closing_undercut"],
-        "pit_loss": context["pit_loss"],
-        "pit_loss_fraction": context["pit_loss_fraction"],
-        "race_progress": context["race_progress"],
-        f"compound_{compound}": 1.0,
-    }
-    undercut_x, undercut_row = strategy_vector(
-        undercut_features, undercut_base, medians["undercut"]
-    )
-
-    overcut_features = artifacts["overcut"]["features"]
-    overcut_base = {
-        "gap_ahead": context["gap_ahead"],
-        "tire_age": context["tire_age"],
-        "ca_tire_age": context["rival_tire_age"],
-        "tire_age_delta": context["tire_age"] - context["rival_tire_age"]
-        if pd.notna(context["rival_tire_age"]) and pd.notna(context["tire_age"])
-        else np.nan,
-        "own_pace": context["own_pace"],
-        "threat_pace": context["threat_pace"],
-        "pace_delta": context["pace_delta"],
-        "deg_delta": context["deg_delta"],
-        "ca_deg_delta": context["ca_deg_delta"],
-        "closing_rate": context["closing_overcut"],
-        "pit_loss": context["pit_loss"],
-        "pit_loss_fraction": context["pit_loss_fraction"],
-        "race_progress": context["race_progress"],
-        f"compound_{compound}": 1.0,
-    }
-    overcut_x, overcut_row = strategy_vector(
-        overcut_features, overcut_base, medians["overcut"]
-    )
-
-    undercut_prob = artifacts["undercut"]["model"].predict_proba(undercut_x.values.astype(float))[0, 1]
-    overcut_prob = artifacts["overcut"]["model"].predict_proba(overcut_x.values.astype(float))[0, 1]
-    return float(undercut_prob), float(overcut_prob), undercut_row, overcut_row
 
 
 def render_degradation(compound, tire_age, artifact):
@@ -1290,7 +1075,7 @@ def main():
     overcut_row = None
     if context is not None:
         undercut_prob, overcut_prob, undercut_row, overcut_row = predict_strategy(
-            context, artifacts
+            context, artifacts, strategy_medians()
         )
 
     selected = current_lap_row(laps, driver, lap)

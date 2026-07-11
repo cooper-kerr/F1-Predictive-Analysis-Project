@@ -33,6 +33,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import statsmodels.formula.api as smf
 
+from dataset_runner import build_race_year_dataset
+
 warnings.filterwarnings('ignore')
 
 ROOT        = Path(__file__).parent.parent
@@ -54,50 +56,48 @@ FIGURE_PATH  = FIGURES_DIR / 'weather_laptime_scatter.png'
 plt.style.use('seaborn-v0_8-darkgrid')
 
 
-def build_full_dataset() -> pd.DataFrame:
-    frames = []
-    for race in RACES:
-        for year in YEARS:
-            try:
-                session = fastf1.get_session(year, race, 'R')
-                session.load(telemetry=False, weather=True, messages=False)
-
-                laps = session.laps.copy()
-                weather = session.weather_data.copy()
-                if laps.empty or weather.empty:
-                    print(f'{year} {race:20s}  SKIP: missing laps/weather')
-                    continue
-
-                laps = laps[laps['LapTime'].notna()].copy()
-                if laps.empty:
-                    print(f'{year} {race:20s}  SKIP: no timed laps')
-                    continue
-
-                laps['Race'] = race
-                laps['Year'] = year
-                laps = laps.sort_values('Time')
-                weather = weather.sort_values('Time')
-
-                merged = pd.merge_asof(laps, weather, on='Time', direction='backward')
-                merged['LapTime_Seconds'] = merged['LapTime'].dt.total_seconds()
-                merged = merged.dropna(subset=[
-                    'LapTime_Seconds', 'TrackTemp', 'WindSpeed', 'Rainfall',
-                    'TyreLife', 'LapNumber', 'Compound'
-                ]).copy()
-                merged = merged[
-                    merged['PitInTime'].isna() &
-                    merged['PitOutTime'].isna() &
-                    (merged['Compound'] != 'None')
-                ].copy()
-
-                frames.append(merged)
-                print(f'{year} {race:20s}  {len(merged):4d} rows')
-            except Exception as exc:
-                print(f'{year} {race:20s}  FAILED: {str(exc)[:80]}')
-
-    if not frames:
+def extract_weather_rows(session, year: int, race: str) -> pd.DataFrame:
+    laps = session.laps.copy()
+    weather = session.weather_data.copy()
+    if laps.empty or weather.empty:
         return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+
+    laps = laps[laps['LapTime'].notna()].copy()
+    if laps.empty:
+        return pd.DataFrame()
+
+    laps['Race'] = race
+    laps['Year'] = year
+    laps = laps.sort_values('Time')
+    weather = weather.sort_values('Time')
+
+    merged = pd.merge_asof(laps, weather, on='Time', direction='backward')
+    merged['LapTime_Seconds'] = merged['LapTime'].dt.total_seconds()
+    merged = merged.dropna(subset=[
+        'LapTime_Seconds', 'TrackTemp', 'WindSpeed', 'Rainfall',
+        'TyreLife', 'LapNumber', 'Compound'
+    ]).copy()
+    return merged[
+        merged['PitInTime'].isna() &
+        merged['PitOutTime'].isna() &
+        (merged['Compound'] != 'None')
+    ].copy()
+
+
+def build_full_dataset() -> pd.DataFrame:
+    return build_race_year_dataset(
+        RACES,
+        YEARS,
+        extract_weather_rows,
+        'rows',
+        session_loader=fastf1.get_session,
+        session_load_kwargs={
+            'telemetry': False,
+            'weather': True,
+            'messages': False,
+        },
+        empty_extraction_message='no weather rows',
+    )
 
 
 def fit_weather_model(df: pd.DataFrame):
