@@ -23,6 +23,7 @@ from f1_strategy_common import (  # noqa: E402
 )
 
 
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 fastf1.Cache.enable_cache(str(CACHE_DIR))
 
 
