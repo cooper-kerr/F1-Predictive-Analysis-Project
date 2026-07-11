@@ -1,12 +1,12 @@
 # FastF1 3.8.x requires pandas<3.0.0 — do NOT upgrade pandas to 3.x.
 # See CLAUDE.md for the root cause (timedelta dtype incompatibility in cached data).
 fastf1~=3.8
-pandas>=2.1.1,<3.0.0
-numpy>=2.0
-scikit-learn>=1.3
+pandas==2.2.3
+numpy==2.4.4
+scikit-learn==1.8.0
 statsmodels==0.14.6
-xgboost>=2.0
-shap>=0.44
+xgboost==3.2.0
+shap==0.51.0
 matplotlib>=3.7
 seaborn>=0.13
 joblib>=1.3
