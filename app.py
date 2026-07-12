@@ -1,6 +1,6 @@
 from pathlib import Path
+import os
 import sys
-from types import SimpleNamespace
 
 import joblib
 import numpy as np
@@ -24,6 +24,10 @@ from race_strategy import (  # noqa: E402
     nearest_pit_label_row,
     predict_strategy,
 )
+from race_state import ReplayRaceStateAdapter  # noqa: E402
+from live.predict import make_action_signal  # noqa: E402
+from live.quality import quality_flags_for_prediction, snapshot_age_seconds  # noqa: E402
+from live.store import LiveRaceStore  # noqa: E402
 from strategy_features import strategy_feature_medians  # noqa: E402
 
 
@@ -495,20 +499,32 @@ def render_static_figure_grid(items, columns=2):
 
 @st.cache_data(show_spinner="Loading bundled 2024 lap data...")
 def load_static_laps():
-    laps = pd.read_csv(STATIC_LAPS_PATH)
-    for col in ["LapTime", "LapStartTime", "PitInTime", "PitOutTime"]:
-        laps[col] = pd.to_timedelta(laps[col], unit="s")
-    laps["TrackStatus"] = laps["TrackStatus"].astype(str)
-    return laps
+    return ReplayRaceStateAdapter(STATIC_LAPS_PATH).load_laps()
+
+
+@st.cache_resource
+def replay_race_state_adapter():
+    return ReplayRaceStateAdapter(STATIC_LAPS_PATH)
+
+
+@st.cache_data(show_spinner="Loading replay race state...")
+def load_race_state_snapshot(race_name, as_of_lap=None):
+    return replay_race_state_adapter().load_snapshot(race_name, as_of_lap=as_of_lap)
+
+
+@st.cache_resource
+def live_race_store(db_path):
+    return LiveRaceStore(db_path)
+
+
+@st.cache_data(ttl=3, show_spinner="Loading live race state...")
+def load_live_race_state_snapshot(db_path, session_key=None):
+    return live_race_store(db_path).load_snapshot(session_key)
 
 
 @st.cache_resource(show_spinner="Loading bundled race data...")
 def load_session(race_name):
-    laps = load_static_laps()
-    race_laps = laps[laps["Race"] == race_name].drop(columns=["Race"]).copy()
-    if race_laps.empty:
-        raise ValueError(f"No bundled 2024 lap data found for {race_name}.")
-    return SimpleNamespace(laps=race_laps)
+    return load_race_state_snapshot(race_name).to_session()
 
 
 @st.cache_data
@@ -1107,102 +1123,62 @@ def gap_band_rate(benchmarks, strategy, gap):
 
 
 def choose_strategy_action(pit_pred, undercut_prob, overcut_prob, context, benchmarks):
-    if context is None or undercut_prob is None or overcut_prob is None:
-        return {
-            "call": "No clean strategy call",
-            "next_step": "Select a lap where the driver has a measurable direct rival ahead.",
-            "confidence": "Unavailable",
-            "why": ["The direct-rival feature vector could not be built for this race state."],
-            "risk": "No live undercut/overcut comparison is available for this lap.",
-            "selected_strategy": None,
-        }
-
-    undercut_lift = undercut_prob - benchmarks["undercut"]["overall_rate"]
-    overcut_lift = overcut_prob - benchmarks["overcut"]["overall_rate"]
-    edge = undercut_prob - overcut_prob
-    gap = context["gap_ahead"]
-    pace_advantage = -context["pace_delta"] if pd.notna(context["pace_delta"]) else np.nan
-    deg_advantage = (
-        context["ca_deg_delta"] - context["deg_delta"]
-        if pd.notna(context["ca_deg_delta"]) and pd.notna(context["deg_delta"])
+    signal = make_action_signal(
+        pit_pred,
+        undercut_prob,
+        overcut_prob,
+        context,
+        benchmarks,
+        quality_flags=[],
+    )
+    undercut_lift = (
+        undercut_prob - benchmarks["undercut"]["overall_rate"]
+        if undercut_prob is not None and context is not None
         else np.nan
     )
-
-    if pit_pred is not None and pd.notna(pit_pred) and pit_pred <= 1.0:
-        urgency = "Box window is open now"
-    elif pit_pred is not None and pd.notna(pit_pred) and pit_pred <= 4.0:
-        urgency = "Prepare for the stop window"
-    else:
-        urgency = "Keep monitoring"
-
-    if edge >= 0.1 and undercut_lift > 0:
-        call = "Attack with undercut"
-        next_step = "Prioritize the next viable stop if pit-exit traffic is acceptable."
-        selected_strategy = "undercut"
-    elif edge <= -0.1 and overcut_lift > 0:
-        call = "Extend for overcut"
-        next_step = "Stay out while lap-time loss and rival undercut threat remain controlled."
-        selected_strategy = "overcut"
-    elif max(undercut_lift, overcut_lift) < 0:
-        call = "Hold position"
-        next_step = "Avoid forcing a low-edge strategy move; wait for a clearer gap or tyre delta."
-        selected_strategy = None
-    else:
-        call = "Marginal call"
-        next_step = "Treat this as a race-engineering judgement call and resolve with traffic, tyre inventory, and safety-car risk."
-        selected_strategy = "undercut" if edge >= 0 else "overcut"
-
-    if abs(edge) >= 0.18:
-        confidence = "High"
-    elif abs(edge) >= 0.08:
-        confidence = "Medium"
-    else:
-        confidence = "Low"
-
-    undercut_signal, _ = probability_signal(
-        undercut_prob, benchmarks["undercut"]["overall_rate"]
+    overcut_lift = (
+        overcut_prob - benchmarks["overcut"]["overall_rate"]
+        if overcut_prob is not None and context is not None
+        else np.nan
     )
-    overcut_signal, _ = probability_signal(
-        overcut_prob, benchmarks["overcut"]["overall_rate"]
-    )
-    gap_signal = (
-        f"direct rival gap {gap:.2f}s vs undercut median "
-        f"{benchmarks['undercut']['median_gap']:.2f}s"
-    )
-    if selected_strategy == "overcut":
-        gap_signal = (
-            f"direct rival gap {gap:.2f}s vs overcut median "
-            f"{benchmarks['overcut']['median_gap']:.2f}s"
-        )
-
-    why = [
-        f"{urgency}: pit-window model says {fmt_laps(pit_pred)} laps.",
-        f"Undercut signal is {undercut_signal}; overcut signal is {overcut_signal}.",
-        gap_signal,
-        f"Recent pace advantage vs rival: {format_signed_seconds(pace_advantage)} per lap; degradation advantage: {format_signed_seconds(deg_advantage)} per tyre-age lap.",
-    ]
-
-    if gap < 1.5:
-        risk = "Very small gaps are traffic-sensitive; pit-lane timing can dominate the model signal."
-    elif gap > 8:
-        risk = "Large gaps require a big tyre or pace offset, so probability should be treated as directional."
-    elif confidence == "Low":
-        risk = "The model probabilities are close; external race context can flip the call."
-    else:
-        risk = "Primary residual risks are safety-car timing, pit-lane congestion, and unmodelled tyre inventory."
-
     return {
-        "call": call,
-        "next_step": next_step,
-        "confidence": confidence,
-        "why": why,
-        "risk": risk,
-        "selected_strategy": selected_strategy,
-        "edge": edge,
+        "call": signal.call,
+        "next_step": signal.next_step,
+        "confidence": signal.confidence,
+        "why": signal.reasons,
+        "risk": signal.risk,
+        "selected_strategy": signal.selected_strategy,
+        "edge": signal.edge,
         "undercut_lift": undercut_lift,
         "overcut_lift": overcut_lift,
-        "pace_advantage": pace_advantage,
-        "deg_advantage": deg_advantage,
+        "pace_advantage": signal.pace_advantage,
+        "deg_advantage": signal.deg_advantage,
+        "quality_flags": signal.quality_flags,
+        "suppressed": signal.suppressed,
+    }
+
+
+def action_from_signal(signal, undercut_prob=None, overcut_prob=None, benchmarks=None):
+    undercut_lift = np.nan
+    overcut_lift = np.nan
+    if benchmarks is not None and undercut_prob is not None:
+        undercut_lift = undercut_prob - benchmarks["undercut"]["overall_rate"]
+    if benchmarks is not None and overcut_prob is not None:
+        overcut_lift = overcut_prob - benchmarks["overcut"]["overall_rate"]
+    return {
+        "call": signal.call,
+        "next_step": signal.next_step,
+        "confidence": signal.confidence,
+        "why": signal.reasons,
+        "risk": signal.risk,
+        "selected_strategy": signal.selected_strategy,
+        "edge": signal.edge,
+        "undercut_lift": undercut_lift,
+        "overcut_lift": overcut_lift,
+        "pace_advantage": signal.pace_advantage,
+        "deg_advantage": signal.deg_advantage,
+        "quality_flags": signal.quality_flags,
+        "suppressed": signal.suppressed,
     }
 
 
@@ -1217,6 +1193,8 @@ def render_action_board(action, context, benchmarks):
     )
     st.markdown(f"**Next action:** {action['next_step']}")
     st.caption(action["risk"])
+    if action.get("quality_flags"):
+        st.caption("Quality flags: " + ", ".join(f"`{flag}`" for flag in action["quality_flags"]))
 
     st.markdown("**Why the model says this**")
     for item in action["why"]:
@@ -1252,29 +1230,75 @@ def main():
     action_benchmarks = load_strategy_action_benchmarks()
 
     races = sorted(pit_df["circuit"].dropna().unique())
+    live_db_path = os.environ.get("LIVE_DB_PATH", str(DATA_DIR / "live_race.sqlite"))
+    live_snapshot = None
+    live_unavailable_reason = None
     with st.sidebar:
         st.header("Race State")
-        race = st.selectbox("Race", races, index=0)
-        race_rows = pit_df[pit_df["circuit"] == race]
-        drivers = sorted(race_rows["driver"].dropna().unique())
-        driver = st.selectbox("Driver", drivers, index=0)
-        driver_rows = race_rows[race_rows["driver"] == driver]
-        min_lap = int(max(1, driver_rows["lap"].min()))
-        max_lap = int(driver_rows["lap"].max())
-        lap = st.slider("Lap", min_value=min_lap, max_value=max_lap, value=min_lap)
-        st.caption(
-            "Saved 2024 race-state rows and bundled lap data power the live demo."
-        )
+        data_mode = st.selectbox("Data Mode", ["Replay", "Live"], index=0)
+        if data_mode == "Live":
+            live_snapshot = load_live_race_state_snapshot(live_db_path)
+            if live_snapshot is None:
+                live_unavailable_reason = (
+                    f"No live snapshot is available in `{Path(live_db_path).name}`. "
+                    "Replay mode remains available."
+                )
+                st.warning(live_unavailable_reason)
+                data_mode = "Replay"
+            else:
+                race = live_snapshot.race_name
+                live_drivers = (
+                    live_snapshot.drivers["Driver"].dropna().astype(str).sort_values().tolist()
+                    if "Driver" in live_snapshot.drivers
+                    else []
+                )
+                drivers = live_drivers or sorted(live_snapshot.laps["Driver"].dropna().astype(str).unique())
+                driver = st.selectbox("Driver", drivers, index=0)
+                min_lap = 1
+                max_lap = max(1, live_snapshot.current_lap)
+                lap = st.slider("Lap", min_value=min_lap, max_value=max_lap, value=max_lap)
+                st.caption("Live mode reads cached snapshots from the local ingest store.")
 
-    session = load_session(race)
+        if data_mode == "Replay":
+            race = st.selectbox("Race", races, index=0)
+            race_rows = pit_df[pit_df["circuit"] == race]
+            drivers = sorted(race_rows["driver"].dropna().unique())
+            driver = st.selectbox("Driver", drivers, index=0)
+            driver_rows = race_rows[race_rows["driver"] == driver]
+            min_lap = int(max(1, driver_rows["lap"].min()))
+            max_lap = int(driver_rows["lap"].max())
+            lap = st.slider("Lap", min_value=min_lap, max_value=max_lap, value=min_lap)
+            st.caption(
+                "Saved 2024 race-state rows and bundled lap data power the replay demo."
+            )
+
+    race_state = (
+        live_snapshot
+        if data_mode == "Live" and live_snapshot is not None
+        else load_race_state_snapshot(race, as_of_lap=lap)
+    )
+    session = race_state.to_session()
     laps = session.laps.copy()
     total_laps = int(laps["LapNumber"].max()) if not laps.empty else max_lap
 
-    pit_row, pit_note = nearest_pit_label_row(pit_df, race, driver, lap)
+    with st.sidebar:
+        age = snapshot_age_seconds(race_state)
+        age_text = "unknown age" if age is None else f"{age:.0f}s old"
+        st.caption(
+            f"{data_mode} snapshot via `{race_state.provider}` · "
+            f"lap {race_state.current_lap}/{race_state.total_laps} · {age_text}"
+        )
+
+    pit_row = None
+    pit_note = None
     pit_x = None
     pit_issues = []
     pit_filled = []
     pit_pred = None
+    if data_mode == "Replay":
+        pit_row, pit_note = nearest_pit_label_row(pit_df, race, driver, lap)
+    else:
+        pit_note = "Live pit-window features are not yet computed from the OpenF1 store; strategy signals remain available."
     if pit_row is not None:
         pit_x, pit_issues, pit_filled = encode_pit_row(
             pit_row, artifacts["pit"], pit_medians
@@ -1294,9 +1318,16 @@ def main():
         undercut_prob, overcut_prob, undercut_row, overcut_row = predict_strategy(
             context, artifacts, strategy_medians()
         )
-    action = choose_strategy_action(
-        pit_pred, undercut_prob, overcut_prob, context, action_benchmarks
+    quality_flags = quality_flags_for_prediction(race_state, context, strategy_reason)
+    signal = make_action_signal(
+        pit_pred,
+        undercut_prob,
+        overcut_prob,
+        context,
+        action_benchmarks,
+        quality_flags=quality_flags,
     )
+    action = action_from_signal(signal, undercut_prob, overcut_prob, action_benchmarks)
 
     selected = current_lap_row(laps, driver, lap)
     if selected is None:
@@ -1312,15 +1343,16 @@ def main():
             <div class="hero-kicker">2024 race-control model wall</div>
             <h1>F1 Race Strategy Intelligence</h1>
             <p>
-                A race-strategy dashboard for the 2024 {race}: pit-window timing,
+                A race-strategy dashboard for {race_state.year} {race}: pit-window timing,
                 undercut and overcut pressure, tyre life, and weather evidence in one inspection view.
             </p>
         </div>
         <div class="scenario-strip">
-            <span class="scenario-pill">Race: <strong>{race} 2024</strong></span>
+            <span class="scenario-pill">Race: <strong>{race} {race_state.year}</strong></span>
             <span class="scenario-pill">Driver: <strong>{driver}</strong></span>
             <span class="scenario-pill">Lap: <strong>{lap} / {total_laps}</strong></span>
             <span class="scenario-pill">Compound: {tyre_badge(compound)}</span>
+            <span class="scenario-pill">Provider: <strong>{race_state.provider}</strong></span>
         </div>
         """,
         unsafe_allow_html=True,
