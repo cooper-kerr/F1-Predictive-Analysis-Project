@@ -15,6 +15,28 @@ DATA_DIR = ROOT / "data"
 MODEL_DIR = ROOT / "models"
 FIGURE_DIR = ROOT / "outputs" / "figures"
 STATIC_LAPS_PATH = DATA_DIR / "f1_2024_static_laps.csv.gz"
+PIT_WINDOW_RESOLVED_EVAL = {
+    "mae": 2.21,
+    "rmse": 3.41,
+    "within_2": 0.585,
+    "within_5": 0.852,
+}
+PIT_WINDOW_FULL_HORIZON_EVAL = {
+    "mae": 2.82,
+    "rmse": 4.54,
+    "within_2": 0.549,
+    "within_5": 0.799,
+}
+BLOCKING_QUALITY_FLAGS = {
+    "stale_feed",
+    "missing_driver_state",
+    "missing_rival",
+    "missing_gap_ahead",
+    "missing_own_pace",
+    "missing_threat_pace",
+    "wet_mode",
+    "safety_car_or_vsc",
+}
 
 sys.path.append(str(ROOT / "scripts"))
 from race_strategy import (  # noqa: E402
@@ -314,6 +336,54 @@ def apply_theme():
             margin-top: -0.25rem;
             margin-bottom: 0.9rem;
         }
+        .badge-row {
+            display: flex;
+            gap: 0.45rem;
+            flex-wrap: wrap;
+            margin: 0.4rem 0 0.8rem;
+        }
+        .quality-badge,
+        .support-badge {
+            display: inline-flex;
+            align-items: center;
+            min-height: 1.65rem;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            padding: 0.16rem 0.56rem;
+            background: rgba(255, 255, 255, 0.055);
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+        .quality-badge.blocking,
+        .support-badge.low {
+            border-color: rgba(255, 59, 48, 0.5);
+            color: #FFD2CE;
+            background: rgba(255, 59, 48, 0.12);
+        }
+        .support-badge.medium {
+            border-color: rgba(242, 201, 76, 0.5);
+            color: #FFE8A3;
+            background: rgba(242, 201, 76, 0.10);
+        }
+        .support-badge.strong {
+            border-color: rgba(40, 209, 124, 0.45);
+            color: #BDF5D7;
+            background: rgba(40, 209, 124, 0.10);
+        }
+        .evidence-step {
+            border-left: 3px solid var(--line-strong);
+            padding: 0.35rem 0 0.55rem 0.9rem;
+            margin: 0.4rem 0;
+        }
+        .evidence-step strong {
+            color: var(--text);
+        }
+        .evidence-step span {
+            color: var(--muted);
+        }
         button[kind="primary"], .stButton button {
             border-radius: 7px;
         }
@@ -429,6 +499,24 @@ def format_probability_points(value):
     return f"{float(value) * 100:+.1f} pp"
 
 
+def support_level(count):
+    if count is None or pd.isna(count):
+        return "unknown"
+    count = int(count)
+    if count >= 60:
+        return "strong"
+    if count >= 25:
+        return "medium"
+    return "low"
+
+
+def support_label(strategy, count, gap_label):
+    if count is None:
+        return "Support unknown"
+    level = support_level(count)
+    return f"{level.title()} support: {int(count)} {strategy} attempts in {gap_label}"
+
+
 def tyre_badge(compound):
     compound_text = str(compound or "UNKNOWN").upper()
     css_class = {
@@ -449,6 +537,16 @@ def render_read_card(title, body):
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_badges(items, badge_type="support"):
+    if not items:
+        return
+    html = "".join(
+        f'<span class="{badge_type}-badge {css_class}">{label}</span>'
+        for label, css_class in items
+    )
+    st.markdown(f'<div class="badge-row">{html}</div>', unsafe_allow_html=True)
 
 
 def render_section_callout(title, body):
@@ -921,10 +1019,19 @@ def render_model_evidence(artifacts):
             [
                 f"Training/evaluation rows in labels CSV: {pit_stats['rows']:,}.",
                 f"Seasons represented: {format_year_range(pit_stats['years'])}; circuits: {pit_stats['circuits']}.",
-                "Saved 2024 holdout: MAE 2.21 laps, RMSE 3.41 laps, 58.5% within +/-2 laps, 85.2% within +/-5 laps.",
+                (
+                    f"Resolved-row 2024 holdout: MAE {PIT_WINDOW_RESOLVED_EVAL['mae']:.2f} laps, "
+                    f"RMSE {PIT_WINDOW_RESOLVED_EVAL['rmse']:.2f} laps, "
+                    f"{PIT_WINDOW_RESOLVED_EVAL['within_2']:.1%} within +/-2 laps."
+                ),
+                (
+                    f"Full-horizon audit with no-window sentinel: MAE {PIT_WINDOW_FULL_HORIZON_EVAL['mae']:.2f} laps, "
+                    f"RMSE {PIT_WINDOW_FULL_HORIZON_EVAL['rmse']:.2f} laps, "
+                    f"{PIT_WINDOW_FULL_HORIZON_EVAL['within_5']:.1%} within +/-5 laps."
+                ),
                 f"Feature count: {len(pit_model.feature_names_in_)}; tuned params saved with the model artifact.",
             ],
-            "Use the lap estimate as a strategy signal, not as a deterministic pit-call timer.",
+            "Use the lap estimate as a strategy signal. Longer or no-window cases are harder than the resolved-row headline suggests.",
         )
     with cards[1]:
         render_model_card(
@@ -1145,6 +1252,7 @@ def choose_strategy_action(pit_pred, undercut_prob, overcut_prob, context, bench
         "call": signal.call,
         "next_step": signal.next_step,
         "confidence": signal.confidence,
+        "signal_strength": signal.confidence,
         "why": signal.reasons,
         "risk": signal.risk,
         "selected_strategy": signal.selected_strategy,
@@ -1169,6 +1277,7 @@ def action_from_signal(signal, undercut_prob=None, overcut_prob=None, benchmarks
         "call": signal.call,
         "next_step": signal.next_step,
         "confidence": signal.confidence,
+        "signal_strength": signal.confidence,
         "why": signal.reasons,
         "risk": signal.risk,
         "selected_strategy": signal.selected_strategy,
@@ -1186,7 +1295,7 @@ def render_action_board(action, context, benchmarks):
     st.subheader("Actionable Strategy Recommendation")
     c1, c2, c3 = st.columns(3)
     c1.metric("Pit wall call", action["call"])
-    c2.metric("Confidence", action["confidence"])
+    c2.metric("Signal strength", action["signal_strength"])
     c3.metric(
         "Probability edge",
         format_probability_points(action.get("edge")),
@@ -1194,29 +1303,81 @@ def render_action_board(action, context, benchmarks):
     st.markdown(f"**Next action:** {action['next_step']}")
     st.caption(action["risk"])
     if action.get("quality_flags"):
-        st.caption("Quality flags: " + ", ".join(f"`{flag}`" for flag in action["quality_flags"]))
+        render_badges(
+            [
+                (
+                    flag.replace("_", " "),
+                    "blocking" if flag in BLOCKING_QUALITY_FLAGS else "",
+                )
+                for flag in action["quality_flags"]
+            ],
+            badge_type="quality",
+        )
 
-    st.markdown("**Why the model says this**")
-    for item in action["why"]:
-        st.write(f"- {item}")
+    st.markdown("**Race facts vs model inferences**")
+    if context is None:
+        st.write("- No clean direct-rival context is available for this race state.")
+    else:
+        fact_rows = pd.DataFrame(
+            [
+                {
+                    "type": "Observed race fact",
+                    "item": "Direct rival gap",
+                    "value": f"{context['gap_ahead']:.2f}s to {context['rival']}",
+                },
+                {
+                    "type": "Observed race fact",
+                    "item": "Compound and tyre age",
+                    "value": f"{context['compound']} tyre, {context['tire_age']:.0f} laps old",
+                },
+                {
+                    "type": "Model inference",
+                    "item": "Undercut vs overcut edge",
+                    "value": format_probability_points(action.get("edge")),
+                },
+                {
+                    "type": "Model inference",
+                    "item": "Signal strength",
+                    "value": action["signal_strength"],
+                },
+            ]
+        )
+        st.dataframe(fact_rows, width="stretch", hide_index=True)
+
+    st.markdown("**Decision evidence walk-through**")
+    for index, item in enumerate(action["why"], start=1):
+        st.markdown(
+            f"""
+            <div class="evidence-step">
+                <strong>{index}. Evidence step</strong><br />
+                <span>{item}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     if context is not None:
         rows = []
+        badges = []
         for strategy in ["undercut", "overcut"]:
             band = gap_band_rate(benchmarks, strategy, context["gap_ahead"])
             if band is None:
                 continue
             rate, count, label = band
+            level = support_level(count)
+            badges.append((support_label(strategy, count, label), level))
             rows.append(
                 {
                     "strategy": strategy,
                     "current_gap_band": label,
                     "historical_success_rate": f"{rate:.1%}",
                     "attempts_in_band": count,
+                    "support_label": level,
                     "overall_base_rate": f"{benchmarks[strategy]['overall_rate']:.1%}",
                 }
             )
         if rows:
+            render_badges(badges, badge_type="support")
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
@@ -1240,8 +1401,8 @@ def main():
             live_snapshot = load_live_race_state_snapshot(live_db_path)
             if live_snapshot is None:
                 live_unavailable_reason = (
-                    f"No live snapshot is available in `{Path(live_db_path).name}`. "
-                    "Replay mode remains available."
+                    f"No active session snapshot is available in `{Path(live_db_path).name}`. "
+                    "During off weeks, before a session starts, or before ingest runs, live calls are intentionally unavailable. Replay mode remains available."
                 )
                 st.warning(live_unavailable_reason)
                 data_mode = "Replay"
@@ -1453,13 +1614,28 @@ def main():
     with pit_tab:
         render_section_callout(
             "Pit Window",
-            "Estimates how many laps remain before a stop becomes strategically available. Lower values mean the car is near the crossover where tyre age, pace, traffic gaps, and pit loss make a stop viable.",
+            "Estimates how many laps remain before a stop becomes strategically available. Treat the point estimate as a decision-support signal with error bands, not a deterministic pit-call timer.",
         )
         if pit_row is None:
             st.caption(pit_note)
         else:
-            st.metric("Predicted laps until pit window opens", f"{pit_pred:.1f}")
+            p_eval_1, p_eval_2, p_eval_3 = st.columns(3)
+            p_eval_1.metric("Predicted laps until pit window opens", f"{pit_pred:.1f}")
+            p_eval_2.metric(
+                "Resolved-row MAE",
+                f"{PIT_WINDOW_RESOLVED_EVAL['mae']:.2f} laps",
+                f"{PIT_WINDOW_RESOLVED_EVAL['within_2']:.1%} within +/-2",
+            )
+            p_eval_3.metric(
+                "Full-horizon MAE",
+                f"{PIT_WINDOW_FULL_HORIZON_EVAL['mae']:.2f} laps",
+                f"{PIT_WINDOW_FULL_HORIZON_EVAL['within_5']:.1%} within +/-5",
+            )
             st.caption(pit_window_read(pit_pred))
+            st.caption(
+                "Uncertainty note: the resolved-row score excludes cases where no pit window opens inside the 20-lap horizon. "
+                "The full-horizon audit uses a 21-lap sentinel for those rows, so it is the safer headline for live-facing wording."
+            )
             st.caption(
                 f"Saved label row: lap {int(pit_row['lap'])}, context `{pit_row['context']}`, "
                 f"compound `{pit_row['compound']}`."
@@ -1495,13 +1671,41 @@ def main():
             )
 
             p1, p2 = st.columns(2)
-            p1.metric("Undercut success probability", f"{undercut_prob:.1%}")
-            p2.metric("Overcut success probability", f"{overcut_prob:.1%}")
+            undercut_signal, _ = probability_signal(
+                undercut_prob, action_benchmarks["undercut"]["overall_rate"]
+            )
+            overcut_signal, _ = probability_signal(
+                overcut_prob, action_benchmarks["overcut"]["overall_rate"]
+            )
+            p1.metric("Undercut success probability", f"{undercut_prob:.1%}", undercut_signal)
+            p2.metric("Overcut success probability", f"{overcut_prob:.1%}", overcut_signal)
             st.caption(strategy_read(undercut_prob, overcut_prob))
             st.caption(
                 "These are live scenario probabilities using the saved model feature lists. "
-                "They are marked not applicable when a clean direct-rival context cannot be built."
+                "They are directional model inferences, not calibrated race-engineering guarantees."
             )
+            support_rows = []
+            support_badges = []
+            for strategy in ["undercut", "overcut"]:
+                band = gap_band_rate(action_benchmarks, strategy, context["gap_ahead"])
+                if band is None:
+                    continue
+                rate, count, label = band
+                level = support_level(count)
+                support_badges.append((support_label(strategy, count, label), level))
+                support_rows.append(
+                    {
+                        "strategy": strategy,
+                        "current_gap_band": label,
+                        "attempts_in_band": count,
+                        "support_label": level,
+                        "historical_success_rate": f"{rate:.1%}",
+                        "overall_base_rate": f"{action_benchmarks[strategy]['overall_rate']:.1%}",
+                    }
+                )
+            render_badges(support_badges, badge_type="support")
+            if support_rows:
+                st.dataframe(pd.DataFrame(support_rows), width="stretch", hide_index=True)
             with st.expander("Strategy feature vectors"):
                 st.write("Undercut")
                 st.dataframe(pd.DataFrame([undercut_row]), width="stretch")

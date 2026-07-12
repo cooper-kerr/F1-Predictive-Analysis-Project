@@ -107,11 +107,11 @@ def make_action_signal(
         selected_strategy = "undercut" if edge >= 0 else "overcut"
 
     if abs(edge) >= 0.18:
-        confidence = "High"
+        confidence = "Strong"
     elif abs(edge) >= 0.08:
-        confidence = "Medium"
+        confidence = "Moderate"
     else:
-        confidence = "Low"
+        confidence = "Weak"
 
     undercut_signal, _ = _probability_signal(
         undercut_prob, benchmarks["undercut"]["overall_rate"]
@@ -140,7 +140,7 @@ def make_action_signal(
         risk = "Very small gaps are traffic-sensitive; pit-lane timing can dominate the model signal."
     elif gap > 8:
         risk = "Large gaps require a big tyre or pace offset, so probability should be treated as directional."
-    elif confidence == "Low":
+    elif confidence == "Weak":
         risk = "The model probabilities are close; external race context can flip the call."
     else:
         risk = "Primary residual risks are safety-car timing, pit-lane congestion, and unmodelled tyre inventory."

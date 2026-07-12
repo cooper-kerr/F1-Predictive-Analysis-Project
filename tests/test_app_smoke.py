@@ -129,7 +129,7 @@ def test_strategy_action_benchmarks_and_recommendation_are_actionable():
 
     assert action["call"]
     assert action["next_step"]
-    assert action["confidence"] in {"High", "Medium", "Low"}
+    assert action["signal_strength"] in {"Strong", "Moderate", "Weak"}
     assert len(action["why"]) >= 3
     assert np.isfinite(action["edge"])
     assert np.isfinite(action["pace_advantage"])
