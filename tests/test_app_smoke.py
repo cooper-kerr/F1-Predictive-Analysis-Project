@@ -103,6 +103,52 @@ def test_sample_strategy_context_and_predictions_from_static_laps():
     assert all(np.isfinite(value) for value in overcut_row.values())
 
 
+def test_strategy_action_benchmarks_and_recommendation_are_actionable():
+    session = app.load_session(SAMPLE_RACE)
+    context, reason = app.build_strategy_context(session, SAMPLE_DRIVER, SAMPLE_LAP)
+    assert reason is None
+
+    undercut_prob, overcut_prob, _, _ = app.predict_strategy(
+        context, app.load_artifacts(), app.strategy_medians()
+    )
+    benchmarks = app.load_strategy_action_benchmarks()
+
+    assert set(benchmarks) == {"undercut", "overcut"}
+    for strategy in benchmarks.values():
+        assert 0.0 <= strategy["overall_rate"] <= 1.0
+        assert strategy["median_gap"] > 0
+        assert not strategy["gap_rates"].empty
+
+    action = app.choose_strategy_action(
+        pit_pred=2.0,
+        undercut_prob=undercut_prob,
+        overcut_prob=overcut_prob,
+        context=context,
+        benchmarks=benchmarks,
+    )
+
+    assert action["call"]
+    assert action["next_step"]
+    assert action["confidence"] in {"High", "Medium", "Low"}
+    assert len(action["why"]) >= 3
+    assert np.isfinite(action["edge"])
+    assert np.isfinite(action["pace_advantage"])
+
+
+def test_strategy_action_handles_missing_direct_rival_context():
+    action = app.choose_strategy_action(
+        pit_pred=None,
+        undercut_prob=None,
+        overcut_prob=None,
+        context=None,
+        benchmarks=app.load_strategy_action_benchmarks(),
+    )
+
+    assert action["call"] == "No clean strategy call"
+    assert action["selected_strategy"] is None
+    assert action["confidence"] == "Unavailable"
+
+
 def test_position_comparison_evidence_artifacts_are_available():
     root = Path(app.ROOT)
     curve_path = root / "data" / "f1_position_comparison_curve.csv"

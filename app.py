@@ -360,6 +360,45 @@ def load_strategy_dataset_summary():
     return summary
 
 
+@st.cache_data
+def load_strategy_action_benchmarks():
+    bins = [0, 2, 4, 6, 8, 12, 20, 30]
+    labels = ["0-2s", "2-4s", "4-6s", "6-8s", "8-12s", "12-20s", "20-30s"]
+    benchmarks = {}
+    for key, path, target in [
+        ("undercut", DATA_DIR / "f1_undercut_dataset.csv", "undercut_success"),
+        ("overcut", DATA_DIR / "f1_overcut_dataset.csv", "overcut_success"),
+    ]:
+        df = pd.read_csv(path)
+        df["gap_bin"] = pd.cut(
+            df["gap_ahead"],
+            bins=bins,
+            labels=labels,
+            include_lowest=True,
+            right=False,
+        )
+        gap_rates = (
+            df.dropna(subset=["gap_bin"])
+            .groupby("gap_bin", observed=True)[target]
+            .agg(["mean", "count"])
+            .reset_index()
+        )
+        compound_rates = (
+            df.groupby("compound", observed=True)[target]
+            .agg(["mean", "count"])
+            .reset_index()
+        )
+        benchmarks[key] = {
+            "overall_rate": float(df[target].mean()),
+            "median_gap": float(df["gap_ahead"].median()),
+            "median_tire_age": float(df["tire_age"].median()),
+            "median_pace_delta": float(df["pace_delta"].median()),
+            "gap_rates": gap_rates,
+            "compound_rates": compound_rates,
+        }
+    return benchmarks
+
+
 def format_year_range(years):
     if not years:
         return "unknown"
@@ -372,6 +411,18 @@ def format_percent(value):
     if pd.isna(value):
         return "n/a"
     return f"{float(value):.1%}"
+
+
+def format_signed_seconds(value):
+    if value is None or pd.isna(value):
+        return "n/a"
+    return f"{float(value):+.2f}s"
+
+
+def format_probability_points(value):
+    if value is None or pd.isna(value):
+        return "n/a"
+    return f"{float(value) * 100:+.1f} pp"
 
 
 def tyre_badge(compound):
@@ -1026,6 +1077,171 @@ def degradation_read(tire_age):
     )
 
 
+def probability_signal(probability, benchmark):
+    if probability is None or pd.isna(probability) or pd.isna(benchmark):
+        return "n/a", np.nan
+    lift = float(probability) - float(benchmark)
+    return f"{lift:+.1%} vs historical base rate", lift
+
+
+def gap_band_rate(benchmarks, strategy, gap):
+    if gap is None or pd.isna(gap):
+        return None
+    bins = [0, 2, 4, 6, 8, 12, 20, 30]
+    labels = ["0-2s", "2-4s", "4-6s", "6-8s", "8-12s", "12-20s", "20-30s"]
+    gap_label = pd.cut(
+        pd.Series([float(gap)]),
+        bins=bins,
+        labels=labels,
+        include_lowest=True,
+        right=False,
+    ).iloc[0]
+    if pd.isna(gap_label):
+        return None
+    rows = benchmarks[strategy]["gap_rates"]
+    matches = rows[rows["gap_bin"].astype(str) == str(gap_label)]
+    if matches.empty:
+        return None
+    row = matches.iloc[0]
+    return float(row["mean"]), int(row["count"]), str(row["gap_bin"])
+
+
+def choose_strategy_action(pit_pred, undercut_prob, overcut_prob, context, benchmarks):
+    if context is None or undercut_prob is None or overcut_prob is None:
+        return {
+            "call": "No clean strategy call",
+            "next_step": "Select a lap where the driver has a measurable direct rival ahead.",
+            "confidence": "Unavailable",
+            "why": ["The direct-rival feature vector could not be built for this race state."],
+            "risk": "No live undercut/overcut comparison is available for this lap.",
+            "selected_strategy": None,
+        }
+
+    undercut_lift = undercut_prob - benchmarks["undercut"]["overall_rate"]
+    overcut_lift = overcut_prob - benchmarks["overcut"]["overall_rate"]
+    edge = undercut_prob - overcut_prob
+    gap = context["gap_ahead"]
+    pace_advantage = -context["pace_delta"] if pd.notna(context["pace_delta"]) else np.nan
+    deg_advantage = (
+        context["ca_deg_delta"] - context["deg_delta"]
+        if pd.notna(context["ca_deg_delta"]) and pd.notna(context["deg_delta"])
+        else np.nan
+    )
+
+    if pit_pred is not None and pd.notna(pit_pred) and pit_pred <= 1.0:
+        urgency = "Box window is open now"
+    elif pit_pred is not None and pd.notna(pit_pred) and pit_pred <= 4.0:
+        urgency = "Prepare for the stop window"
+    else:
+        urgency = "Keep monitoring"
+
+    if edge >= 0.1 and undercut_lift > 0:
+        call = "Attack with undercut"
+        next_step = "Prioritize the next viable stop if pit-exit traffic is acceptable."
+        selected_strategy = "undercut"
+    elif edge <= -0.1 and overcut_lift > 0:
+        call = "Extend for overcut"
+        next_step = "Stay out while lap-time loss and rival undercut threat remain controlled."
+        selected_strategy = "overcut"
+    elif max(undercut_lift, overcut_lift) < 0:
+        call = "Hold position"
+        next_step = "Avoid forcing a low-edge strategy move; wait for a clearer gap or tyre delta."
+        selected_strategy = None
+    else:
+        call = "Marginal call"
+        next_step = "Treat this as a race-engineering judgement call and resolve with traffic, tyre inventory, and safety-car risk."
+        selected_strategy = "undercut" if edge >= 0 else "overcut"
+
+    if abs(edge) >= 0.18:
+        confidence = "High"
+    elif abs(edge) >= 0.08:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+
+    undercut_signal, _ = probability_signal(
+        undercut_prob, benchmarks["undercut"]["overall_rate"]
+    )
+    overcut_signal, _ = probability_signal(
+        overcut_prob, benchmarks["overcut"]["overall_rate"]
+    )
+    gap_signal = (
+        f"direct rival gap {gap:.2f}s vs undercut median "
+        f"{benchmarks['undercut']['median_gap']:.2f}s"
+    )
+    if selected_strategy == "overcut":
+        gap_signal = (
+            f"direct rival gap {gap:.2f}s vs overcut median "
+            f"{benchmarks['overcut']['median_gap']:.2f}s"
+        )
+
+    why = [
+        f"{urgency}: pit-window model says {fmt_laps(pit_pred)} laps.",
+        f"Undercut signal is {undercut_signal}; overcut signal is {overcut_signal}.",
+        gap_signal,
+        f"Recent pace advantage vs rival: {format_signed_seconds(pace_advantage)} per lap; degradation advantage: {format_signed_seconds(deg_advantage)} per tyre-age lap.",
+    ]
+
+    if gap < 1.5:
+        risk = "Very small gaps are traffic-sensitive; pit-lane timing can dominate the model signal."
+    elif gap > 8:
+        risk = "Large gaps require a big tyre or pace offset, so probability should be treated as directional."
+    elif confidence == "Low":
+        risk = "The model probabilities are close; external race context can flip the call."
+    else:
+        risk = "Primary residual risks are safety-car timing, pit-lane congestion, and unmodelled tyre inventory."
+
+    return {
+        "call": call,
+        "next_step": next_step,
+        "confidence": confidence,
+        "why": why,
+        "risk": risk,
+        "selected_strategy": selected_strategy,
+        "edge": edge,
+        "undercut_lift": undercut_lift,
+        "overcut_lift": overcut_lift,
+        "pace_advantage": pace_advantage,
+        "deg_advantage": deg_advantage,
+    }
+
+
+def render_action_board(action, context, benchmarks):
+    st.subheader("Actionable Strategy Recommendation")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Pit wall call", action["call"])
+    c2.metric("Confidence", action["confidence"])
+    c3.metric(
+        "Probability edge",
+        format_probability_points(action.get("edge")),
+    )
+    st.markdown(f"**Next action:** {action['next_step']}")
+    st.caption(action["risk"])
+
+    st.markdown("**Why the model says this**")
+    for item in action["why"]:
+        st.write(f"- {item}")
+
+    if context is not None:
+        rows = []
+        for strategy in ["undercut", "overcut"]:
+            band = gap_band_rate(benchmarks, strategy, context["gap_ahead"])
+            if band is None:
+                continue
+            rate, count, label = band
+            rows.append(
+                {
+                    "strategy": strategy,
+                    "current_gap_band": label,
+                    "historical_success_rate": f"{rate:.1%}",
+                    "attempts_in_band": count,
+                    "overall_base_rate": f"{benchmarks[strategy]['overall_rate']:.1%}",
+                }
+            )
+        if rows:
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+
 def main():
     st.set_page_config(page_title="F1 Race Strategy Intelligence", layout="wide")
     apply_theme()
@@ -1033,6 +1249,7 @@ def main():
     pit_df = load_pit_labels()
     pit_medians = pit_feature_medians()
     artifacts = load_artifacts()
+    action_benchmarks = load_strategy_action_benchmarks()
 
     races = sorted(pit_df["circuit"].dropna().unique())
     with st.sidebar:
@@ -1077,6 +1294,9 @@ def main():
         undercut_prob, overcut_prob, undercut_row, overcut_row = predict_strategy(
             context, artifacts, strategy_medians()
         )
+    action = choose_strategy_action(
+        pit_pred, undercut_prob, overcut_prob, context, action_benchmarks
+    )
 
     selected = current_lap_row(laps, driver, lap)
     if selected is None:
@@ -1127,8 +1347,9 @@ def main():
     with s3:
         render_read_card("Tyre phase", degradation_read(tire_age))
 
-    overview, pit_tab, strategy_tab, degradation_tab, weather_tab, evidence_tab = st.tabs(
+    action_tab, overview, pit_tab, strategy_tab, degradation_tab, weather_tab, evidence_tab = st.tabs(
         [
+            "Action Board",
             "Overview",
             "Pit Window",
             "Undercut / Overcut",
@@ -1137,6 +1358,43 @@ def main():
             "Evidence",
         ]
     )
+
+    with action_tab:
+        render_section_callout(
+            "From Model Output To Race Decision",
+            "This board converts the saved pit-window, undercut, and overcut models into a race-engineering recommendation: what to do next, how strong the signal is, which features moved the call, and what risk remains outside the compact model.",
+        )
+        render_action_board(action, context, action_benchmarks)
+        if context is not None:
+            st.markdown("**Live race-state feature deltas**")
+            feature_rows = pd.DataFrame(
+                [
+                    {
+                        "feature": "gap_to_direct_rival",
+                        "current": f"{context['gap_ahead']:.2f}s",
+                        "interpretation": "Smaller gaps make track-position attacks more realistic, but increase traffic sensitivity.",
+                    },
+                    {
+                        "feature": "own_vs_rival_recent_pace",
+                        "current": format_signed_seconds(action["pace_advantage"]),
+                        "interpretation": "Positive means the selected driver has been faster over the recent clean-lap window.",
+                    },
+                    {
+                        "feature": "degradation_edge",
+                        "current": format_signed_seconds(action["deg_advantage"]),
+                        "interpretation": "Positive means the rival's tyre degradation slope is worse than the selected driver's.",
+                    },
+                    {
+                        "feature": "pit_loss_fraction",
+                        "current": f"{context['pit_loss_fraction']:.1%}",
+                        "interpretation": "Normalizes local pit loss against current race pace so circuits are comparable.",
+                    },
+                ]
+            )
+            st.dataframe(feature_rows, width="stretch", hide_index=True)
+        st.caption(
+            "This layer does not retrain the models. It makes the current artifacts more decision-ready by comparing live probabilities and race-state features against historical attempt priors."
+        )
 
     with overview:
         render_section_callout(
