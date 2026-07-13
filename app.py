@@ -50,7 +50,24 @@ from race_state import ReplayRaceStateAdapter  # noqa: E402
 from live.predict import make_action_signal  # noqa: E402
 from live.quality import quality_flags_for_prediction, snapshot_age_seconds  # noqa: E402
 from live.store import LiveRaceStore  # noqa: E402
-from strategy_features import strategy_feature_medians  # noqa: E402
+from strategy_features import prepare_strategy_frame, strategy_feature_medians  # noqa: E402
+
+
+CHART_COLORS = {
+    "bg": "rgba(0,0,0,0)",
+    "plot_bg": "rgba(21,27,35,0.96)",
+    "grid": "rgba(207,216,220,0.14)",
+    "zero": "rgba(207,216,220,0.22)",
+    "text": "#EEF3F7",
+    "muted": "#AAB7C4",
+    "amber": "#F2C94C",
+    "red": "#FF3B30",
+    "green": "#28D17C",
+    "blue": "#64B5F6",
+    "soft": "#F45B69",
+    "medium": "#F2C94C",
+    "hard": "#D9E2EC",
+}
 
 
 @st.cache_data
@@ -414,6 +431,14 @@ def load_position_curve():
 
 
 @st.cache_data
+def load_strategy_attempt_data():
+    return {
+        "undercut": pd.read_csv(DATA_DIR / "f1_undercut_dataset.csv"),
+        "overcut": pd.read_csv(DATA_DIR / "f1_overcut_dataset.csv"),
+    }
+
+
+@st.cache_data
 def load_strategy_dataset_summary():
     summary = {}
     for key, path, target in [
@@ -595,6 +620,48 @@ def render_static_figure_grid(items, columns=2):
             render_static_figure(*item)
 
 
+def apply_plotly_theme(fig, height=420, legend=True):
+    fig.update_layout(
+        height=height,
+        margin=dict(l=24, r=24, t=42, b=40),
+        paper_bgcolor=CHART_COLORS["bg"],
+        plot_bgcolor=CHART_COLORS["plot_bg"],
+        font=dict(size=13, color=CHART_COLORS["text"]),
+        hoverlabel=dict(bgcolor="#111820", font_size=13),
+    )
+    fig.update_xaxes(
+        gridcolor=CHART_COLORS["grid"],
+        zerolinecolor=CHART_COLORS["zero"],
+        linecolor=CHART_COLORS["zero"],
+        tickfont=dict(color=CHART_COLORS["muted"]),
+        title_font=dict(color=CHART_COLORS["text"]),
+    )
+    fig.update_yaxes(
+        gridcolor=CHART_COLORS["grid"],
+        zerolinecolor=CHART_COLORS["zero"],
+        linecolor=CHART_COLORS["zero"],
+        tickfont=dict(color=CHART_COLORS["muted"]),
+        title_font=dict(color=CHART_COLORS["text"]),
+    )
+    if legend:
+        fig.update_layout(
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="left",
+                x=0,
+            )
+        )
+    else:
+        fig.update_layout(showlegend=False)
+    return fig
+
+
+def render_plotly(fig, **kwargs):
+    st.plotly_chart(fig, width="stretch", config={"displaylogo": False}, **kwargs)
+
+
 @st.cache_data(show_spinner="Loading bundled 2024 lap data...")
 def load_static_laps():
     return ReplayRaceStateAdapter(STATIC_LAPS_PATH).load_laps()
@@ -672,6 +739,317 @@ def load_degradation_support():
         )
         .reset_index()
     )
+
+
+def render_pit_window_timeline(pit_df, race, driver, lap):
+    race_rows = pit_df[pit_df["circuit"] == race].copy()
+    if race_rows.empty:
+        st.info("No pit-window labels are available for this race.")
+        return
+
+    race_rows["driver"] = race_rows["driver"].astype(str)
+    lap_summary = (
+        race_rows.groupby("lap", observed=True)
+        .agg(
+            median_laps_until_open=("laps_until_open", "median"),
+            open_share=("gap_is_open_now", "mean"),
+            active_drivers=("driver", "nunique"),
+        )
+        .reset_index()
+    )
+    driver_rows = race_rows[race_rows["driver"] == driver].sort_values("lap")
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        row_heights=[0.68, 0.32],
+        subplot_titles=(
+            "Laps Until Pit Window Opens",
+            "Share Of Field With An Open Window",
+        ),
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=lap_summary["lap"],
+            y=lap_summary["median_laps_until_open"],
+            mode="lines",
+            name="Race median",
+            line=dict(color=CHART_COLORS["blue"], width=3),
+            customdata=np.stack([lap_summary["active_drivers"]], axis=-1),
+            hovertemplate=(
+                "<b>Race median</b><br>"
+                "Lap %{x}<br>"
+                "Median laps until open: %{y:.1f}<br>"
+                "Active drivers: %{customdata[0]:.0f}<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=1,
+    )
+    if not driver_rows.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=driver_rows["lap"],
+                y=driver_rows["laps_until_open"],
+                mode="lines+markers",
+                name=driver,
+                line=dict(color=CHART_COLORS["amber"], width=3),
+                marker=dict(size=7),
+                customdata=np.stack(
+                    [
+                        driver_rows["compound"].astype(str),
+                        driver_rows["context"].astype(str),
+                        driver_rows["gap_ahead"].fillna(np.nan),
+                    ],
+                    axis=-1,
+                ),
+                hovertemplate=(
+                    f"<b>{driver}</b><br>"
+                    "Lap %{x}<br>"
+                    "Laps until open: %{y:.1f}<br>"
+                    "Compound: %{customdata[0]}<br>"
+                    "Context: %{customdata[1]}<br>"
+                    "Gap ahead: %{customdata[2]:.2f}s<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=1,
+        )
+    fig.add_trace(
+        go.Bar(
+            x=lap_summary["lap"],
+            y=lap_summary["open_share"],
+            name="Open-window share",
+            marker=dict(color=CHART_COLORS["green"]),
+            opacity=0.72,
+            hovertemplate=(
+                "<b>Open-window share</b><br>"
+                "Lap %{x}<br>"
+                "Share: %{y:.0%}<extra></extra>"
+            ),
+        ),
+        row=2,
+        col=1,
+    )
+    fig.add_vline(
+        x=lap,
+        line_width=2,
+        line_dash="dot",
+        line_color=CHART_COLORS["red"],
+        row="all",
+        col=1,
+    )
+    fig.update_yaxes(title_text="Laps", row=1, col=1, rangemode="tozero")
+    fig.update_yaxes(title_text="Open share", tickformat=".0%", row=2, col=1, range=[0, 1])
+    fig.update_xaxes(title_text="Lap", row=2, col=1)
+    apply_plotly_theme(fig, height=560)
+    render_plotly(fig)
+    st.caption(
+        "Declarative view: line marks encode the selected driver against the race median; "
+        "bars show how much of the field already has an open strategic window."
+    )
+
+
+def strategy_probability_frame(strategy, artifact):
+    target = f"{strategy}_success"
+    df = load_strategy_attempt_data()[strategy].copy()
+    features = artifact["features"]
+    df, features = prepare_strategy_frame(df, strategy, features)
+    model_df = df.dropna(subset=features + [target]).copy()
+    if model_df.empty:
+        return model_df
+    probs = artifact["model"].predict_proba(model_df[features].to_numpy(dtype=float))[:, 1]
+    model_df["prob_success"] = probs
+    model_df["prob_bin"] = pd.cut(
+        model_df["prob_success"],
+        bins=np.linspace(0, 1, 6),
+        labels=["0-20%", "20-40%", "40-60%", "60-80%", "80-100%"],
+        include_lowest=True,
+    )
+    model_df["gap_bin"] = pd.cut(
+        model_df["gap_ahead"],
+        bins=[0, 2, 4, 6, 8, 12, 20, 30],
+        labels=["0-2s", "2-4s", "4-6s", "6-8s", "8-12s", "12-20s", "20-30s"],
+        include_lowest=True,
+        right=False,
+    )
+    return model_df
+
+
+def render_strategy_probability_distributions(artifacts, undercut_prob, overcut_prob):
+    fig = go.Figure()
+    for strategy, label, color, current_prob in [
+        ("undercut", "Undercut", CHART_COLORS["green"], undercut_prob),
+        ("overcut", "Overcut", CHART_COLORS["blue"], overcut_prob),
+    ]:
+        df = strategy_probability_frame(strategy, artifacts[strategy])
+        if df.empty:
+            continue
+        fig.add_trace(
+            go.Histogram(
+                x=df["prob_success"],
+                name=label,
+                marker=dict(color=color),
+                opacity=0.62,
+                nbinsx=24,
+                histnorm="probability density",
+                hovertemplate=(
+                    f"<b>{label}</b><br>"
+                    "Predicted probability bin: %{x:.0%}<br>"
+                    "Density: %{y:.2f}<extra></extra>"
+                ),
+            )
+        )
+        if current_prob is not None and not pd.isna(current_prob):
+            fig.add_vline(
+                x=float(current_prob),
+                line_width=2,
+                line_dash="dash",
+                line_color=color,
+                annotation_text=f"current {label.lower()} {float(current_prob):.0%}",
+                annotation_position="top",
+            )
+    fig.update_layout(barmode="overlay")
+    fig.update_xaxes(title_text="Predicted success probability", tickformat=".0%", range=[0, 1])
+    fig.update_yaxes(title_text="Attempt density")
+    apply_plotly_theme(fig, height=390)
+    render_plotly(fig)
+
+
+def render_strategy_gap_heatmap(artifacts, current_gap=None):
+    frames = []
+    for strategy in ["undercut", "overcut"]:
+        df = strategy_probability_frame(strategy, artifacts[strategy])
+        if df.empty:
+            continue
+        grouped = (
+            df.dropna(subset=["gap_bin", "prob_bin"])
+            .groupby(["gap_bin", "prob_bin"], observed=True)
+            .agg(success_rate=(f"{strategy}_success", "mean"), attempts=(f"{strategy}_success", "size"))
+            .reset_index()
+        )
+        grouped["strategy"] = strategy.title()
+        frames.append(grouped)
+    if not frames:
+        return
+
+    chart_df = pd.concat(frames, ignore_index=True)
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Undercut", "Overcut"),
+        shared_yaxes=True,
+        horizontal_spacing=0.08,
+    )
+    for col, strategy in enumerate(["Undercut", "Overcut"], start=1):
+        subset = chart_df[chart_df["strategy"] == strategy]
+        pivot = subset.pivot(index="prob_bin", columns="gap_bin", values="success_rate")
+        counts = subset.pivot(index="prob_bin", columns="gap_bin", values="attempts")
+        fig.add_trace(
+            go.Heatmap(
+                z=pivot.to_numpy(),
+                x=[str(value) for value in pivot.columns],
+                y=[str(value) for value in pivot.index],
+                coloraxis="coloraxis",
+                customdata=counts.to_numpy(),
+                hovertemplate=(
+                    "<b>%{x} gap / %{y} model band</b><br>"
+                    "Observed success: %{z:.0%}<br>"
+                    "Attempts: %{customdata:.0f}<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=col,
+        )
+        if current_gap is not None and not pd.isna(current_gap):
+            current_band = pd.cut(
+                pd.Series([float(current_gap)]),
+                bins=[0, 2, 4, 6, 8, 12, 20, 30],
+                labels=["0-2s", "2-4s", "4-6s", "6-8s", "8-12s", "12-20s", "20-30s"],
+                include_lowest=True,
+                right=False,
+            ).iloc[0]
+            if not pd.isna(current_band):
+                fig.add_vline(
+                    x=str(current_band),
+                    line_width=2,
+                    line_dash="dot",
+                    line_color=CHART_COLORS["amber"],
+                    row=1,
+                    col=col,
+                )
+    fig.update_layout(
+        coloraxis=dict(
+            colorscale=[
+                [0.0, "#301014"],
+                [0.5, "#665B2A"],
+                [1.0, "#12472B"],
+            ],
+            cmin=0,
+            cmax=1,
+            colorbar=dict(title="Observed<br>success", tickformat=".0%"),
+        )
+    )
+    fig.update_xaxes(title_text="Direct-rival gap band")
+    fig.update_yaxes(title_text="Model probability band", autorange="reversed")
+    apply_plotly_theme(fig, height=430)
+    render_plotly(fig)
+
+
+def render_strategy_attempt_maps(artifacts, undercut_prob, overcut_prob, context):
+    render_strategy_probability_distributions(artifacts, undercut_prob, overcut_prob)
+    render_strategy_gap_heatmap(
+        artifacts,
+        current_gap=context["gap_ahead"] if context is not None else None,
+    )
+    st.caption(
+        "Technical design: these charts are declarative histogram and heatmap views over the bundled attempt tables. "
+        "The expected instance count is two strategy models on one page, so Plotly remains comfortably within the browser budget."
+    )
+
+
+def render_weather_coefficient_chart(coefficients):
+    coefs = coefficients.copy()
+    coefs["abs_coef"] = coefs["coef"].abs()
+    display = coefs[~coefs["term"].str.startswith("Intercept", na=False)].nlargest(
+        14, "abs_coef"
+    )
+    if display.empty:
+        return
+
+    display = display.sort_values("coef")
+    display["direction"] = np.where(display["coef"] >= 0, "Adds lap time", "Reduces lap time")
+    fig = go.Figure()
+    for direction, color in [
+        ("Reduces lap time", CHART_COLORS["green"]),
+        ("Adds lap time", CHART_COLORS["red"]),
+    ]:
+        group = display[display["direction"] == direction]
+        if group.empty:
+            continue
+        fig.add_trace(
+            go.Bar(
+                x=group["coef"],
+                y=group["term"],
+                orientation="h",
+                name=direction,
+                marker=dict(color=color),
+                customdata=np.stack([group["std_err"], group["p_value"]], axis=-1),
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "Coefficient: %{x:.4f}s/lap<br>"
+                    "Std err: %{customdata[0]:.4f}<br>"
+                    "p-value: %{customdata[1]:.4f}<extra></extra>"
+                ),
+            )
+        )
+    fig.add_vline(x=0, line_width=1.5, line_color=CHART_COLORS["muted"])
+    fig.update_xaxes(title_text="OLS coefficient (seconds per lap)")
+    fig.update_yaxes(title_text="")
+    apply_plotly_theme(fig, height=520)
+    render_plotly(fig)
 
 
 def age_bin_for_tire_age(tire_age, age_labels):
@@ -907,6 +1285,8 @@ def render_weather(artifact, compound):
     else:
         st.dataframe(coefs, width="stretch", hide_index=True)
 
+    render_weather_coefficient_chart(coefs)
+
     track_temp = coefs[coefs["term"].str.contains("TrackTemp", case=False, regex=True)]
     if not track_temp.empty:
         term = track_temp.iloc[0]
@@ -1071,13 +1451,12 @@ def render_model_evidence(artifacts):
         )
 
     with evidence_tabs[1]:
+        render_strategy_attempt_maps(artifacts, None, None, None)
         st.subheader("Undercut Evidence")
         render_static_figure_grid(
             [
                 ("undercut_model_evaluation.png", "Undercut Evaluation", "Classifier evaluation for stopping before the rival."),
                 ("undercut_shap.png", "Undercut SHAP", "Interpretability view for undercut success probability."),
-                ("undercut_gap_vs_success.png", "Gap vs Success", "Observed relationship between direct-rival gap and result."),
-                ("undercut_age_vs_success.png", "Tyre Age vs Success", "Observed tyre-age context for undercut attempts."),
             ]
         )
         st.subheader("Overcut Evidence")
@@ -1085,7 +1464,6 @@ def render_model_evidence(artifacts):
             [
                 ("overcut_model_evaluation.png", "Overcut Evaluation", "Classifier evaluation for staying out after the rival pits."),
                 ("overcut_shap.png", "Overcut SHAP", "Interpretability view for overcut success probability."),
-                ("overcut_gap_vs_success.png", "Gap vs Success", "Observed relationship between direct-rival gap and result."),
                 ("overcut_stay_out_laps.png", "Stay-Out Laps", "How long successful and unsuccessful overcut attempts extended."),
             ]
         )
@@ -1645,6 +2023,7 @@ def main():
                     list(artifacts["pit"]["model"].feature_names_in_)
                 ].astype(str).to_frame("value")
                 st.dataframe(display, width="stretch")
+            render_pit_window_timeline(pit_df, race, driver, lap)
             if pit_filled:
                 st.caption(
                     "Missing pit-window feature values filled before prediction: "
@@ -1706,6 +2085,12 @@ def main():
             render_badges(support_badges, badge_type="support")
             if support_rows:
                 st.dataframe(pd.DataFrame(support_rows), width="stretch", hide_index=True)
+            render_strategy_attempt_maps(
+                artifacts,
+                undercut_prob,
+                overcut_prob,
+                context,
+            )
             with st.expander("Strategy feature vectors"):
                 st.write("Undercut")
                 st.dataframe(pd.DataFrame([undercut_row]), width="stretch")
